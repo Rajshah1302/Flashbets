@@ -29,7 +29,6 @@ export const metadata: Metadata = {
   ],
   authors: [{ name: "Raj Shah" }],
   creator: "Flashbets Team",
-  metadataBase: new URL("https://yellowweb3.app"),=
   openGraph: {
     title: "Yellow Web3 Prediction Market",
     description:
