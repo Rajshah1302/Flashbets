@@ -1,11 +1,11 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { Wallet, Clock, Activity } from 'lucide-react';
 
-const VISIBLE_ROUNDS = 12;          // total columns
-const GRAPH_COLS = VISIBLE_ROUNDS / 2; // left half (6) = graph
-const CURRENT_COL = GRAPH_COLS;        // idx 6 is always the "current" round
+const VISIBLE_ROUNDS = 12;               // total columns
+const GRAPH_COLS = VISIBLE_ROUNDS / 2;   // left half (6) = graph
+const CURRENT_COL = GRAPH_COLS;          // idx 6 is always the "current" round (locked)
 const REVEAL_EVERY_SECONDS = 5;
 const REVEAL_MS = REVEAL_EVERY_SECONDS * 1000;
 const AMBER_HEX = '#f59e0b';
@@ -35,7 +35,7 @@ function seedRounds(startId) {
   return Array.from({ length: VISIBLE_ROUNDS }, (_, i) => newRound(startId + i));
 }
 
-// % → bucket (for payout + “winning dot” placement)
+// % → bucket (for payouts + band highlight)
 function bucketFromChange(pct) {
   if (pct > 0.5) return 0;
   if (pct >= 0.1) return 1;
@@ -63,14 +63,14 @@ export default function PredictionMarketUI() {
   const [betAmount, setBetAmount] = useState(5);
   const [timeLeft, setTimeLeft] = useState(REVEAL_EVERY_SECONDS);
 
-  // Rolling window (fixed 12 columns). Left 6 = graph, idx 6 = current (locked), right 5 = future (bettable)
+  // fixed 12 columns; left 6 = graph, index 6 = current (locked), right 5 = future (bettable)
   const [rounds, setRounds] = useState(() => seedRounds(10423));
 
-  // Stats
+  // stats
   const [wins, setWins] = useState(0);
   const [completedBets, setCompletedBets] = useState(0);
 
-  // Toast
+  // toast
   const [toast, setToast] = useState(null);
   useEffect(() => {
     if (!toast) return;
@@ -78,7 +78,7 @@ export default function PredictionMarketUI() {
     return () => clearTimeout(t);
   }, [toast]);
 
-  // Refs for fresh state + single-interval gating
+  // fresh state refs + gating
   const latestPriceRef = useRef(initialPrice);
   const roundsRef = useRef(rounds);
   const intervalRef = useRef(null);
@@ -88,7 +88,7 @@ export default function PredictionMarketUI() {
   useEffect(() => { latestPriceRef.current = priceHistory[priceHistory.length - 1]; }, [priceHistory]);
   useEffect(() => { roundsRef.current = rounds; }, [rounds]);
 
-  // Reset on market change
+  // reset on market change
   useEffect(() => {
     const base = markets.find(m => m.id === selectedMarket)?.price ?? 0;
     setPriceHistory([base]);
@@ -98,7 +98,7 @@ export default function PredictionMarketUI() {
     lastRevealAtRef.current = 0;
   }, [selectedMarket]);
 
-  // Timer: one reveal per 5s (Strict Mode safe)
+  // timer / reveal
   useEffect(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
 
@@ -107,7 +107,7 @@ export default function PredictionMarketUI() {
         if (prev <= 1) {
           const now = Date.now();
           if (now - lastRevealAtRef.current < REVEAL_MS - 50) {
-            return REVEAL_EVERY_SECONDS; // prevent accidental double reveal
+            return REVEAL_EVERY_SECONDS;
           }
           lastRevealAtRef.current = now;
 
@@ -116,7 +116,7 @@ export default function PredictionMarketUI() {
           const newPrice = last * (1 + changePct / 100);
           const winningBucket = bucketFromChange(changePct);
 
-          // Settle the CURRENT column (always index 6)
+          // Settle current (index 6)
           const i = CURRENT_COL;
           const snapshot = roundsRef.current[i];
           if (snapshot && !snapshot.settled) {
@@ -136,7 +136,7 @@ export default function PredictionMarketUI() {
             }
           }
 
-          // Mark current as revealed, then slide window left by one (so it moves into the graph half)
+          // reveal current, slide window
           setRounds(prev => {
             let next = prev.slice();
             if (next[i]) {
@@ -144,14 +144,12 @@ export default function PredictionMarketUI() {
             }
             const lastId = next[next.length - 1].id;
             next = next.slice(1);            // drop leftmost
-            next.push(newRound(lastId + 1)); // add new future round at the far right
+            next.push(newRound(lastId + 1)); // add new future
             return next;
           });
 
-          // Track price
           setPriceHistory(ph => {
             const extended = [...ph, newPrice];
-            // keep it lean (not strictly required)
             while (extended.length > 64) extended.shift();
             latestPriceRef.current = extended[extended.length - 1];
             return extended;
@@ -166,7 +164,7 @@ export default function PredictionMarketUI() {
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, []);
 
-  // Bets — only allowed on FUTURE rounds (indexes > CURRENT_COL)
+  // bet handler — only future rounds (idx > CURRENT_COL)
   const handleBet = (roundIndex, bucketId) => {
     const r = rounds[roundIndex];
     if (!r || r.revealed) return;
@@ -188,7 +186,6 @@ export default function PredictionMarketUI() {
     });
   };
 
-  // helpers
   const timerPct = (timeLeft / REVEAL_EVERY_SECONDS) * 100;
   const lastPrice = priceHistory[priceHistory.length - 1];
   const pnl = userBalance - initialBalanceRef.current;
@@ -288,7 +285,7 @@ export default function PredictionMarketUI() {
           <div>
             <h2 className="text-2xl font-bold mb-1">Live Prediction Chart</h2>
             <p className="text-sm text-gray-500">
-              Left half shows <span className="text-amber-400">results</span> (graph). Right half shows <span className="text-amber-400">current + future</span> (grid). Current round is locked.
+              Left half shows <span className="text-amber-400">results</span> as triangles (center→peak→center). Right half is <span className="text-amber-400">current + future</span>; current is locked.
             </p>
           </div>
           <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg px-4 py-2 flex items-center gap-3">
@@ -359,37 +356,40 @@ export default function PredictionMarketUI() {
             {/* Columns */}
             <div className="ml-23 grid grid-cols-12 relative" style={{ height: '512px' }}>
               {rounds.map((round, roundIdx) => {
-                const isGraphSide = roundIdx < GRAPH_COLS;  // left half
-                const isCurrent = roundIdx === CURRENT_COL;  // first column on right half
+                const isGraphSide = roundIdx < GRAPH_COLS;
+                const isCurrent = roundIdx === CURRENT_COL;
                 const isPastOrCurrent = roundIdx <= CURRENT_COL;
 
                 return (
                   <div key={round.id} className="border-r border-gray-800/50 last:border-r-0 relative group">
-                    {/* GRAPH SIDE (left 6): show dots + vertical connector after reveal */}
+                    {/* GRAPH SIDE (left 6): triangle per revealed round */}
                     {isGraphSide ? (
                       <div className="h-full relative bg-gray-900/20">
                         {round.revealed && typeof round.winningBucket === 'number' && (
                           <>
-                            {/* Optional subtle band highlight */}
+                            {/* subtle band to show the winning bucket */}
                             <div
                               className="absolute left-0 right-0 bg-amber-500/5 border-y border-amber-500/20"
                               style={{ top: `${round.winningBucket * 25}%`, height: '25%' }}
                             />
-                            {/* Vertical connector: center (50%) ↔ winning bucket center */}
-                            <svg className="absolute inset-0 w-full h-full pointer-events-none">
-                              <line
-                                x1="50%"
-                                x2="50%"
-                                y1="50%"
-                                y2={`${bucketCenterY(round.winningBucket)}%`}
+
+                            {/* Triangle: (0,50) -> (50, bucketCenter) -> (100,50) */}
+                            <svg
+                              className="absolute inset-0 w-full h-full pointer-events-none"
+                              viewBox="0 0 100 100"
+                              preserveAspectRatio="none"
+                            >
+                              <polygon
+                                points={`0,50 50,${bucketCenterY(round.winningBucket)} 100,50`}
+                                fill="rgba(245,158,11,0.15)"
                                 stroke={AMBER_HEX}
                                 strokeWidth="2"
-                                strokeLinecap="round"
+                                vectorEffect="non-scaling-stroke"
                               />
-                              {/* center dot (baseline) */}
-                              <circle cx="50%" cy="50%" r="4" fill={AMBER_HEX} />
+                              {/* center baseline dot (after every price round) */}
+                              <circle cx="50" cy="50" r="2.5" fill={AMBER_HEX} />
                               {/* winning dot */}
-                              <circle cx="50%" cy={`${bucketCenterY(round.winningBucket)}%`} r="5" fill={AMBER_HEX} />
+                              <circle cx="50" cy={bucketCenterY(round.winningBucket)} r="3.5" fill={AMBER_HEX} />
                             </svg>
 
                             {/* Hover chip */}
@@ -437,7 +437,7 @@ export default function PredictionMarketUI() {
                       </div>
                     )}
 
-                    {/* Current column timer underline (right half, first column) */}
+                    {/* Current column underline */}
                     {isCurrent && (
                       <div className="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 bg-gradient-to-r from-transparent via-amber-500 to-transparent" />
                     )}
