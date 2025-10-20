@@ -8,7 +8,6 @@ const GRAPH_COLS = VISIBLE_ROUNDS / 2; // left half (6) = graph
 const CURRENT_COL = GRAPH_COLS; // idx 6 is always the "current" round (locked)
 const REVEAL_EVERY_SECONDS = 5;
 const REVEAL_MS = REVEAL_EVERY_SECONDS * 1000;
-const AMBER_HEX = "#f59e0b";
 
 // betting config
 const MIN_BET = 0.25;
@@ -97,10 +96,10 @@ export default function PredictionMarketUI() {
   const [userBalance, setUserBalance] = useState(125.5);
   const initialBalanceRef = useRef(125.5);
 
-  // NEW: fractional bet amount with quick chips
+  // fractional bet amount with quick chips
   const [betAmount, setBetAmount] = useState<number>(5);
 
-  // NEW: totals for the right panel
+  // totals for the right panel
   const [totalStaked, setTotalStaked] = useState(0); // gross amount wagered
   const [totalWinnings, setTotalWinnings] = useState(0); // gross payouts collected
 
@@ -112,6 +111,19 @@ export default function PredictionMarketUI() {
   // stats
   const [wins, setWins] = useState(0);
   const [completedBets, setCompletedBets] = useState(0);
+
+  // NEW: store settled bets for the “Past Bets” section
+  type HistoryRow = {
+    roundId: number;
+    label: string;
+    amount: number;
+    payout: number;
+    profit: number;
+    result: "win" | "lose";
+    price: number;
+    changePct: number;
+  };
+  const [betHistory, setBetHistory] = useState<HistoryRow[]>([]);
 
   // toast
   const [toast, setToast] = useState<null | {
@@ -148,11 +160,12 @@ export default function PredictionMarketUI() {
     setTimeLeft(REVEAL_EVERY_SECONDS);
     lastRevealAtRef.current = 0;
 
-    // reset stats tied to market if desired (keeping userBalance)
+    // keep balance, but reset stats/history for clarity per-market
     setWins(0);
     setCompletedBets(0);
     setTotalStaked(0);
     setTotalWinnings(0);
+    setBetHistory([]);
   }, [selectedMarket]);
 
   // timer / reveal
@@ -183,19 +196,47 @@ export default function PredictionMarketUI() {
               (b) => b.userBet != null
             );
             if (userBetBucket) {
+              const stake = userBetBucket.userBet!;
               setCompletedBets((c) => c + 1);
+
               if (userBetBucket.id === winningBucket) {
-                const payout =
-                  totalPool * (userBetBucket.userBet! / winnerPool);
+                const payout = totalPool * (stake / winnerPool);
                 setUserBalance((b) => b + payout);
                 setWins((w) => w + 1);
-                setToast({
-                  type: "win",
-                  amount: payout - userBetBucket.userBet!,
-                });
+                setToast({ type: "win", amount: payout - stake });
                 setTotalWinnings((tw) => tw + payout);
+
+                // log to history
+                setBetHistory((prev) => [
+                  ...prev.slice(-99),
+                  {
+                    roundId: snapshot.id,
+                    label: userBetBucket.label,
+                    amount: stake,
+                    payout,
+                    profit: payout - stake,
+                    result: "win",
+                    price: newPrice,
+                    changePct,
+                  },
+                ]);
               } else {
-                setToast({ type: "lose", amount: userBetBucket.userBet! });
+                setToast({ type: "lose", amount: stake });
+
+                // log to history (loss)
+                setBetHistory((prev) => [
+                  ...prev.slice(-99),
+                  {
+                    roundId: snapshot.id,
+                    label: userBetBucket.label,
+                    amount: stake,
+                    payout: 0,
+                    profit: -stake,
+                    result: "lose",
+                    price: newPrice,
+                    changePct,
+                  },
+                ]);
               }
             }
           }
@@ -243,7 +284,7 @@ export default function PredictionMarketUI() {
     if (!r || r.revealed) return;
     if (roundIndex <= CURRENT_COL) return; // lock past + current
 
-    // prevent multiple buckets in same round to keep settlement simple
+    // prevent multiple buckets in same round
     const alreadyPlaced = r.buckets.some(
       (b) => b.userBet != null && b.id !== bucketId
     );
@@ -267,18 +308,11 @@ export default function PredictionMarketUI() {
     setRounds((prev) => {
       const updated = prev.slice();
       const round = updated[roundIndex];
-
-      // accumulate if user repeats on same bucket
       const buckets = round.buckets.map((b) =>
         b.id === bucketId
-          ? {
-              ...b,
-              userBet: (b.userBet ?? 0) + amt,
-              bets: b.bets + amt,
-            }
+          ? { ...b, userBet: (b.userBet ?? 0) + amt, bets: b.bets + amt }
           : b
       );
-
       updated[roundIndex] = { ...round, buckets };
       return updated;
     });
@@ -289,7 +323,7 @@ export default function PredictionMarketUI() {
   const pnl = userBalance - initialBalanceRef.current;
   const winRate = completedBets ? (wins / completedBets) * 100 : 0;
 
-  // derive active bets info for the right panel
+  // Active (unsettled) bets derived from current rounds
   const activeBets = useMemo(() => {
     return rounds
       .map((r, idx) => ({ r, idx }))
@@ -297,7 +331,7 @@ export default function PredictionMarketUI() {
         ({ idx, r }) =>
           idx > CURRENT_COL && r.buckets.some((b) => b.userBet != null)
       )
-      .map(({ r, idx }) => {
+      .map(({ r }) => {
         const b = r.buckets.find((bb) => bb.userBet != null)!;
         const totalPool = r.buckets.reduce((s, bb) => s + bb.bets, 0);
         const winnerPool = r.buckets[b.id].bets;
@@ -317,7 +351,7 @@ export default function PredictionMarketUI() {
     <div className="min-h-screen bg-black text-gray-100">
       {/* Header */}
       <header className="border-b border-gray-800/50 bg-gradient-to-r from-black via-gray-900/40 to-black backdrop-blur-md">
-        <div className="max-w-7xl mx-auto px-6 py-4">
+        <div className="max-w-9xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-8">
               <div className="flex items-center gap-2">
@@ -394,7 +428,7 @@ export default function PredictionMarketUI() {
 
       {/* Market Selector */}
       <div className="border-b border-gray-800/50 bg-gray-900/20">
-        <div className="max-w-7xl mx-auto px-6">
+        <div className="max-w-9xl mx-auto px-6">
           <div className="flex gap-1">
             {markets.map((m) => (
               <button
@@ -512,12 +546,10 @@ export default function PredictionMarketUI() {
                             {round.revealed &&
                               typeof round.winningBucket === "number" && (
                                 <>
-                                  {/* Center baseline */}
                                   <div
                                     className="absolute left-0 right-0 h-px bg-gray-800"
                                     style={{ top: "50%" }}
                                   />
-
                                   <svg
                                     className="absolute inset-0 w-full h-full pointer-events-none"
                                     viewBox="0 0 100 100"
@@ -652,10 +684,9 @@ export default function PredictionMarketUI() {
                         {isCurrent && (
                           <div className="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 bg-gradient-to-r from-amber-400 via-amber-500 " />
                         )}
-                        {/* Yellow divider line + center dot between graph and grid */}
+                        {/* Yellow divider between graph and grid */}
                         {roundIdx === GRAPH_COLS - 1 && (
                           <>
-                            {/* vertical divider */}
                             <div
                               className="pointer-events-none absolute right-0 top-0 bottom-0 w-[2px] bg-yellow-400"
                               style={{
@@ -664,8 +695,6 @@ export default function PredictionMarketUI() {
                                 zIndex: 50,
                               }}
                             />
-
-                            {/* center dot on the divider */}
                             <div
                               className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 h-3 w-3 rounded-full bg-yellow-400"
                               style={{
@@ -684,7 +713,7 @@ export default function PredictionMarketUI() {
             </div>
           </div>
 
-          {/* RIGHT SIDEBAR: Betting & Stats */}
+          {/* RIGHT SIDEBAR: Betting & Stats (Active Bets removed from here) */}
           <aside className="w-full md:w-80 shrink-0">
             <div className="bg-gray-900/30 border border-gray-800/50 rounded-xl p-4 sticky top-6">
               <h3 className="text-sm font-semibold text-gray-200 mb-3">
@@ -727,7 +756,6 @@ export default function PredictionMarketUI() {
                       const clamped = Number.isFinite(v)
                         ? Math.max(MIN_BET, Math.min(v, userBalance))
                         : MIN_BET;
-                      // round to cents
                       setBetAmount(fromCents(toCents(clamped)));
                     }}
                     className="w-full bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-amber-500/60"
@@ -793,51 +821,124 @@ export default function PredictionMarketUI() {
                 Next reveal in{" "}
                 <span className="text-amber-400 font-medium">{timeLeft}s</span>
               </div>
-
-              {/* Active Bets */}
-              <div className="mt-4">
-                <div className="text-xs font-semibold text-gray-300 mb-2">
-                  Active Bets
-                </div>
-                {activeBets.length === 0 ? (
-                  <div className="text-xs text-gray-500">
-                    No active bets yet.
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {activeBets.map((b) => (
-                      <div
-                        key={b.roundId}
-                        className="border border-gray-800 rounded p-3 bg-black/20"
-                      >
-                        <div className="flex items-center justify-between text-xs">
-                          <div className="font-mono text-gray-400">
-                            Round #{b.roundId}
-                          </div>
-                          <div className="font-medium">{b.label}</div>
-                        </div>
-                        <div className="mt-1 grid grid-cols-3 gap-2 text-[11px]">
-                          <div className="text-gray-500">You</div>
-                          <div className="text-gray-500">Pool</div>
-                          <div className="text-gray-500">Est. Win</div>
-                          <div className="font-mono">
-                            ${formatUSD(b.amount)}
-                          </div>
-                          <div className="font-mono">${formatUSD(b.pool)}</div>
-                          <div className="font-mono">
-                            ${formatUSD(b.estPayout)}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
             </div>
           </aside>
         </div>
 
-        {/* REMOVED bottom Stats panel */}
+        {/* ===== BELOW EVERYTHING: Active & Past Bets ===== */}
+        <div className="mt-8 space-y-8">
+          {/* Active Bets */}
+          <section className="bg-gray-900/30 border border-gray-800/50 rounded-xl p-4">
+            <h3 className="text-sm font-semibold text-gray-200 mb-3">
+              Active Bets
+            </h3>
+            {activeBets.length === 0 ? (
+              <div className="text-xs text-gray-500">No active bets yet.</div>
+            ) : (
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {activeBets.map((b) => (
+                  <div
+                    key={b.roundId}
+                    className="border border-gray-800 rounded p-3 bg-black/20"
+                  >
+                    <div className="flex items-center justify-between text-xs">
+                      <div className="font-mono text-gray-400">
+                        Round #{b.roundId}
+                      </div>
+                      <div className="font-medium">{b.label}</div>
+                    </div>
+                    <div className="mt-1 grid grid-cols-3 gap-2 text-[11px]">
+                      <div className="text-gray-500">You</div>
+                      <div className="text-gray-500">Pool</div>
+                      <div className="text-gray-500">Est. Win</div>
+                      <div className="font-mono">${formatUSD(b.amount)}</div>
+                      <div className="font-mono">${formatUSD(b.pool)}</div>
+                      <div className="font-mono">${formatUSD(b.estPayout)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* Past Bets */}
+          <section className="bg-gray-900/30 border border-gray-800/50 rounded-xl p-4">
+            <h3 className="text-sm font-semibold text-gray-200 mb-3">
+              Past Bets
+            </h3>
+            {betHistory.length === 0 ? (
+              <div className="text-xs text-gray-500">No settled bets yet.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-xs">
+                  <thead className="text-gray-500">
+                    <tr className="[&>th]:text-left [&>th]:font-medium [&>th]:px-3 [&>th]:py-2">
+                      <th>Round</th>
+                      <th>Bucket</th>
+                      <th>You</th>
+                      <th>Payout</th>
+                      <th>Profit</th>
+                      <th>Δ%</th>
+                      <th>Price</th>
+                      <th>Result</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...betHistory].reverse().map((h) => (
+                      <tr
+                        key={`${h.roundId}-${h.label}-${h.result}`}
+                        className="border-t border-gray-800/60"
+                      >
+                        <td className="px-3 py-2 font-mono text-gray-400">
+                          #{h.roundId}
+                        </td>
+                        <td className="px-3 py-2">{h.label}</td>
+                        <td className="px-3 py-2 font-mono">
+                          ${formatUSD(h.amount)}
+                        </td>
+                        <td className="px-3 py-2 font-mono">
+                          ${formatUSD(h.payout)}
+                        </td>
+                        <td
+                          className={`px-3 py-2 font-mono ${
+                            h.profit >= 0 ? "text-amber-300" : "text-red-300"
+                          }`}
+                        >
+                          {h.profit >= 0 ? "+" : "-"}$
+                          {formatUSD(Math.abs(h.profit))}
+                        </td>
+                        <td
+                          className={`px-3 py-2 font-mono ${
+                            h.changePct >= 0
+                              ? "text-emerald-300"
+                              : "text-red-300"
+                          }`}
+                        >
+                          {h.changePct >= 0 ? "+" : ""}
+                          {h.changePct.toFixed(2)}%
+                        </td>
+                        <td className="px-3 py-2 font-mono">
+                          ${formatUSD(h.price)}
+                        </td>
+                        <td className="px-3 py-2">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[11px] ${
+                              h.result === "win"
+                                ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/30"
+                                : "bg-red-500/10 text-red-300 border border-red-500/30"
+                            }`}
+                          >
+                            {h.result.toUpperCase()}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </div>
       </div>
     </div>
   );
