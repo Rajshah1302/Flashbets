@@ -3,9 +3,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Wallet, Clock, Activity } from 'lucide-react';
 
-const VISIBLE_ROUNDS = 12;
-const MIN_FUTURE_BETTABLE = 5;
-const MID_INDEX = Math.max(MIN_FUTURE_BETTABLE, Math.floor(VISIBLE_ROUNDS / 2));
+const VISIBLE_ROUNDS = 12;          // total columns
+const GRAPH_COLS = VISIBLE_ROUNDS / 2; // left half (6) = graph
+const CURRENT_COL = GRAPH_COLS;        // idx 6 is always the "current" round
 const REVEAL_EVERY_SECONDS = 5;
 const REVEAL_MS = REVEAL_EVERY_SECONDS * 1000;
 const AMBER_HEX = '#f59e0b';
@@ -35,7 +35,7 @@ function seedRounds(startId) {
   return Array.from({ length: VISIBLE_ROUNDS }, (_, i) => newRound(startId + i));
 }
 
-// % → bucket
+// % → bucket (for payout + “winning dot” placement)
 function bucketFromChange(pct) {
   if (pct > 0.5) return 0;
   if (pct >= 0.1) return 1;
@@ -63,12 +63,8 @@ export default function PredictionMarketUI() {
   const [betAmount, setBetAmount] = useState(5);
   const [timeLeft, setTimeLeft] = useState(REVEAL_EVERY_SECONDS);
 
-  // Rolling window
+  // Rolling window (fixed 12 columns). Left 6 = graph, idx 6 = current (locked), right 5 = future (bettable)
   const [rounds, setRounds] = useState(() => seedRounds(10423));
-  const [currentRoundIndex, setCurrentRoundIndex] = useState(0); // anchors at MID_INDEX
-
-  // Price points for stats; chart uses per-round % buckets
-  const [priceHistory, setPriceHistory] = useState([initialPrice]);
 
   // Stats
   const [wins, setWins] = useState(0);
@@ -85,13 +81,12 @@ export default function PredictionMarketUI() {
   // Refs for fresh state + single-interval gating
   const latestPriceRef = useRef(initialPrice);
   const roundsRef = useRef(rounds);
-  const currentIdxRef = useRef(currentRoundIndex);
   const intervalRef = useRef(null);
   const lastRevealAtRef = useRef(0);
 
+  const [priceHistory, setPriceHistory] = useState([initialPrice]);
   useEffect(() => { latestPriceRef.current = priceHistory[priceHistory.length - 1]; }, [priceHistory]);
   useEffect(() => { roundsRef.current = rounds; }, [rounds]);
-  useEffect(() => { currentIdxRef.current = currentRoundIndex; }, [currentRoundIndex]);
 
   // Reset on market change
   useEffect(() => {
@@ -99,8 +94,6 @@ export default function PredictionMarketUI() {
     setPriceHistory([base]);
     latestPriceRef.current = base;
     setRounds(seedRounds(10423));
-    setCurrentRoundIndex(0);
-    currentIdxRef.current = 0;
     setTimeLeft(REVEAL_EVERY_SECONDS);
     lastRevealAtRef.current = 0;
   }, [selectedMarket]);
@@ -123,8 +116,8 @@ export default function PredictionMarketUI() {
           const newPrice = last * (1 + changePct / 100);
           const winningBucket = bucketFromChange(changePct);
 
-          // Settle current round
-          const i = currentIdxRef.current;
+          // Settle the CURRENT column (always index 6)
+          const i = CURRENT_COL;
           const snapshot = roundsRef.current[i];
           if (snapshot && !snapshot.settled) {
             const totalPool = snapshot.buckets.reduce((s, b) => s + b.bets, 0);
@@ -143,31 +136,23 @@ export default function PredictionMarketUI() {
             }
           }
 
-          const nextIndex = i >= MID_INDEX ? MID_INDEX : i + 1;
-
-          // Reveal + slide at/after middle
+          // Mark current as revealed, then slide window left by one (so it moves into the graph half)
           setRounds(prev => {
             let next = prev.slice();
             if (next[i]) {
               next[i] = { ...next[i], revealed: true, settled: true, price: newPrice, changePct, winningBucket };
             }
-            if (i >= MID_INDEX) {
-              const lastId = next[next.length - 1].id;
-              next = next.slice(1);
-              next.push(newRound(lastId + 1));
-            }
+            const lastId = next[next.length - 1].id;
+            next = next.slice(1);            // drop leftmost
+            next.push(newRound(lastId + 1)); // add new future round at the far right
             return next;
           });
 
-          // Anchor index
-          setCurrentRoundIndex(nextIndex);
-          currentIdxRef.current = nextIndex;
-
-          // Price history for stats; limit so chart stops at current col
+          // Track price
           setPriceHistory(ph => {
             const extended = [...ph, newPrice];
-            const targetLen = nextIndex + 1;
-            while (extended.length > targetLen) extended.shift();
+            // keep it lean (not strictly required)
+            while (extended.length > 64) extended.shift();
             latestPriceRef.current = extended[extended.length - 1];
             return extended;
           });
@@ -181,11 +166,11 @@ export default function PredictionMarketUI() {
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, []);
 
-  // Bets
+  // Bets — only allowed on FUTURE rounds (indexes > CURRENT_COL)
   const handleBet = (roundIndex, bucketId) => {
     const r = rounds[roundIndex];
     if (!r || r.revealed) return;
-    if (r.buckets.some(b => b.userBet != null)) return;
+    if (roundIndex <= CURRENT_COL) return; // lock past + current
 
     const amtRaw = Number.isFinite(betAmount) ? betAmount : 1;
     const amt = Math.max(1, Math.floor(Math.min(amtRaw, userBalance)));
@@ -203,20 +188,11 @@ export default function PredictionMarketUI() {
     });
   };
 
-  // Chart helpers (% buckets)
-  const changePcts = useMemo(() => rounds.map(r => r.changePct), [rounds]);
-  const xUnit = 100 / VISIBLE_ROUNDS;
+  // helpers
   const timerPct = (timeLeft / REVEAL_EVERY_SECONDS) * 100;
   const lastPrice = priceHistory[priceHistory.length - 1];
   const pnl = userBalance - initialBalanceRef.current;
   const winRate = completedBets ? (wins / completedBets) * 100 : 0;
-
-  const yForIdx = (idx) => {
-    const pct = changePcts[idx];
-    if (pct == null) return null;
-    const bucket = bucketFromChange(pct);
-    return bucketCenterY(bucket);
-  };
 
   return (
     <div className="min-h-screen bg-black text-gray-100">
@@ -312,7 +288,7 @@ export default function PredictionMarketUI() {
           <div>
             <h2 className="text-2xl font-bold mb-1">Live Prediction Chart</h2>
             <p className="text-sm text-gray-500">
-              Anchored at the middle with {MIN_FUTURE_BETTABLE}+ future rounds • New price every {REVEAL_EVERY_SECONDS}s
+              Left half shows <span className="text-amber-400">results</span> (graph). Right half shows <span className="text-amber-400">current + future</span> (grid). Current round is locked.
             </p>
           </div>
           <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg px-4 py-2 flex items-center gap-3">
@@ -346,17 +322,17 @@ export default function PredictionMarketUI() {
               <div
                 key={round.id}
                 className={`p-3 text-center text-xs border-r border-gray-800/50 last:border-r-0 relative ${
-                  idx === currentRoundIndex ? 'bg-amber-500/5' : ''
+                  idx === CURRENT_COL ? 'bg-amber-500/5' : ''
                 }`}
               >
                 <div className="font-mono font-semibold">#{round.id}</div>
-                {idx === currentRoundIndex && (
+                {idx === CURRENT_COL && (
                   <div className="text-amber-400 font-medium mt-1 flex items-center justify-center gap-1 animate-pulse">
                     <Clock className="w-3 h-3" />
                     {timeLeft}s
                   </div>
                 )}
-                {idx === currentRoundIndex && (
+                {idx === CURRENT_COL && (
                   <div className="absolute inset-x-0 -bottom-px h-0.5 bg-gradient-to-r from-transparent via-amber-500 to-transparent" />
                 )}
               </div>
@@ -366,7 +342,7 @@ export default function PredictionMarketUI() {
           {/* Chart/Grid Area */}
           <div className="relative">
             {/* Row labels */}
-            <div className="absolute left-0 top-0 bottom-0 w-32 border-r border-gray-800/50 bg-black/20 z-10">
+            <div className="absolute left-0 top-0 bottom-0 w-23 border-r border-gray-800/50 bg-black/20 z-10">
               {[
                 { id: 0, label: 'Strong Up',   threshold: '> +0.5%' },
                 { id: 1, label: 'Up',          threshold: '+0.1 to +0.5%' },
@@ -374,74 +350,70 @@ export default function PredictionMarketUI() {
                 { id: 3, label: 'Strong Down', threshold: '< -0.5%' },
               ].map((bucket) => (
                 <div key={bucket.id} className="h-32 flex flex-col justify-center px-3 border-b border-gray-800/50 last:border-b-0">
-                  <div className="text-xs font-medium mb-1">{bucket.label}</div>
+                  <div className="text-xs font-medium">{bucket.label}</div>
                   <div className="text-xs text-gray-500">{bucket.threshold}</div>
                 </div>
               ))}
             </div>
 
-            {/* Columns + Chart */}
-            <div className="ml-32 grid grid-cols-12 relative" style={{ height: '512px' }}>
-              {/* SVG Chart — now includes the very first revealed column (idx 0) */}
-              <svg className="absolute inset-0 pointer-events-none z-20" style={{ width: '100%', height: '100%' }}>
-                {/* lines: connect 0→1, 1→2, ... only if both are revealed */}
-                {Array.from({ length: currentRoundIndex }, (_, i) => {
-                  const idx1 = i;
-                  const idx2 = i + 1;
-                  const y1 = yForIdx(idx1);
-                  const y2 = yForIdx(idx2);
-                  if (y1 == null || y2 == null) return null;
-                  const x1 = idx1 * xUnit;
-                  const x2 = idx2 * xUnit;
-                  return (
-                    <line key={`l-${idx1}-${idx2}`} x1={`${x1}%`} y1={`${y1}%`} x2={`${x2}%`} y2={`${y2}%`} stroke={AMBER_HEX} strokeWidth="2" />
-                  );
-                })}
-                {/* dots: draw for all revealed idx, including 0 */}
-                {Array.from({ length: currentRoundIndex + 1 }, (_, i) => {
-                  const y = yForIdx(i);
-                  if (y == null) return null;
-                  const x = i * xUnit;
-                  return <circle key={`c-${i}`} cx={`${x}%`} cy={`${y}%`} r="4" fill={AMBER_HEX} />;
-                })}
-              </svg>
-
-              {/* Cells */}
+            {/* Columns */}
+            <div className="ml-23 grid grid-cols-12 relative" style={{ height: '512px' }}>
               {rounds.map((round, roundIdx) => {
-                const isPast = roundIdx < currentRoundIndex;
-                const isCurrent = roundIdx === currentRoundIndex;
+                const isGraphSide = roundIdx < GRAPH_COLS;  // left half
+                const isCurrent = roundIdx === CURRENT_COL;  // first column on right half
+                const isPastOrCurrent = roundIdx <= CURRENT_COL;
+
                 return (
                   <div key={round.id} className="border-r border-gray-800/50 last:border-r-0 relative group">
-                    {round.revealed ? (
+                    {/* GRAPH SIDE (left 6): show dots + vertical connector after reveal */}
+                    {isGraphSide ? (
                       <div className="h-full relative bg-gray-900/20">
-                        {/* Winning band */}
-                        {typeof round.winningBucket === 'number' && (
-                          <div
-                            className={`absolute left-0 right-0 bg-amber-500/10 border-y border-amber-500/30 ${isCurrent ? 'animate-pulse' : ''}`}
-                            style={{ top: `${round.winningBucket * 25}%`, height: '25%' }}
-                          />
-                        )}
+                        {round.revealed && typeof round.winningBucket === 'number' && (
+                          <>
+                            {/* Optional subtle band highlight */}
+                            <div
+                              className="absolute left-0 right-0 bg-amber-500/5 border-y border-amber-500/20"
+                              style={{ top: `${round.winningBucket * 25}%`, height: '25%' }}
+                            />
+                            {/* Vertical connector: center (50%) ↔ winning bucket center */}
+                            <svg className="absolute inset-0 w-full h-full pointer-events-none">
+                              <line
+                                x1="50%"
+                                x2="50%"
+                                y1="50%"
+                                y2={`${bucketCenterY(round.winningBucket)}%`}
+                                stroke={AMBER_HEX}
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                              />
+                              {/* center dot (baseline) */}
+                              <circle cx="50%" cy="50%" r="4" fill={AMBER_HEX} />
+                              {/* winning dot */}
+                              <circle cx="50%" cy={`${bucketCenterY(round.winningBucket)}%`} r="5" fill={AMBER_HEX} />
+                            </svg>
 
-                        {/* Hidden info chip — appears on hover */}
-                        {typeof round.changePct === 'number' && (
-                          <div
-                            className="absolute left-0 right-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150"
-                            style={{ top: `${bucketCenterY(bucketFromChange(round.changePct))}%`, zIndex: 30 }}
-                          >
-                            <div className="bg-amber-500/20 border border-amber-500/40 rounded px-2 py-1 text-xs font-mono backdrop-blur-sm">
-                              Δ {round.changePct >= 0 ? '+' : ''}{round.changePct.toFixed(2)}%
-                              <span className="ml-1 text-[10px] opacity-75">${formatUSD(round.price)}</span>
-                            </div>
-                          </div>
+                            {/* Hover chip */}
+                            {typeof round.changePct === 'number' && (
+                              <div
+                                className="absolute left-0 right-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150"
+                                style={{ top: `${bucketCenterY(round.winningBucket)}%`, zIndex: 30 }}
+                              >
+                                <div className="bg-amber-500/20 border border-amber-500/40 rounded px-2 py-1 text-xs font-mono backdrop-blur-sm">
+                                  Δ {round.changePct >= 0 ? '+' : ''}{round.changePct.toFixed(2)}%
+                                  <span className="ml-1 text-[10px] opacity-75">${formatUSD(round.price)}</span>
+                                </div>
+                              </div>
+                            )}
+                          </>
                         )}
                       </div>
                     ) : (
-                      // Betting grid (past locked, current+future open)
+                      // GRID SIDE (right 6): current locked; future bettable
                       <div className="h-full grid grid-rows-4">
                         {[0, 1, 2, 3].map((bucketId) => {
                           const cell = round.buckets[bucketId];
                           const hasBet = cell.userBet != null;
-                          const disabled = isPast;
+                          const disabled = isPastOrCurrent; // lock past + current
                           return (
                             <button
                               key={bucketId}
@@ -463,6 +435,11 @@ export default function PredictionMarketUI() {
                           );
                         })}
                       </div>
+                    )}
+
+                    {/* Current column timer underline (right half, first column) */}
+                    {isCurrent && (
+                      <div className="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 bg-gradient-to-r from-transparent via-amber-500 to-transparent" />
                     )}
                   </div>
                 );
