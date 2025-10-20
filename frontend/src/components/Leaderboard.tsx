@@ -13,12 +13,18 @@ type Props = {
   settleSignal: number;
   /** window length */
   points?: number;
-  /** EMA smoothing factor [0..1], higher = smoother */
+  /** EMA smoothing factor [0..1], higher = smoother (applies to non-step ids) */
   ema?: number;
   /** chart height */
   height?: number | string;
   /** show crosshair + tooltip */
   interactive?: boolean;
+  /** players that should step instantly to raw value on settle (no EMA, no tween) */
+  stepIds?: string[];
+  /** tween only the non-step lines */
+  tweenOthers?: boolean;
+  /** tween duration for non-step lines */
+  tweenMs?: number;
 };
 
 /* ---------- Utils ---------- */
@@ -26,7 +32,7 @@ const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n
 
 function niceTicks(min: number, max: number, count = 5) {
   if (!isFinite(min) || !isFinite(max)) return [0, 1];
-  if (min === max) { max = min + 1; }
+  if (min === max) max = min + 1;
   const span = max - min;
   const step0 = span / Math.max(1, count);
   const mag = Math.pow(10, Math.floor(Math.log10(step0)));
@@ -77,6 +83,9 @@ export default function LeaderboardCombinedChart({
   ema = 0.85,
   height = 420,
   interactive = true,
+  stepIds = ["you"],
+  tweenOthers = true,
+  tweenMs = 700,
 }: Props) {
   // init window using current profits (or 0 if missing)
   const [series, setSeries] = useState<Record<string, number[]>>(() => {
@@ -88,7 +97,7 @@ export default function LeaderboardCombinedChart({
     return init;
   });
 
-  // when players list changes, ensure series exists for all
+  // ensure new players have a series
   useEffect(() => {
     setSeries((prev) => {
       const next: Record<string, number[]> = { ...prev };
@@ -102,14 +111,14 @@ export default function LeaderboardCombinedChart({
     });
   }, [players, points, latestProfits]);
 
-  // EMA state (smooths incoming profits)
+  // EMA state (for non-step ids)
   const emaRef = useRef<Record<string, number>>({});
   useEffect(() => {
     const init: Record<string, number> = {};
     players.forEach((p) => (init[p.id] = series[p.id]?.[series[p.id].length - 1] ?? 0));
     emaRef.current = init;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // once
+  }, []); // once at mount
 
   // tween state
   const fromRef = useRef<Record<string, number[]>>(series);
@@ -118,48 +127,68 @@ export default function LeaderboardCombinedChart({
   const rafRef = useRef<number | null>(null);
   const lastTsRef = useRef<number | null>(null);
 
-  // on each settle, push latest profits (smoothed) and start tween
+  // on each settle: push latest profits; stepIds go raw (no EMA) and no tween
   useEffect(() => {
-    // build target window
+    const stepSet = new Set(stepIds);
+
+    // compute new target series
     const target: Record<string, number[]> = {};
     players.forEach((p) => {
-      const arr = series[p.id] ?? Array.from({ length: points }, () => 0);
-      const prevSmooth = emaRef.current[p.id] ?? arr[arr.length - 1] ?? 0;
-      const raw = latestProfits[p.id] ?? prevSmooth;
-      const smooth = ema * prevSmooth + (1 - ema) * raw;
-      emaRef.current[p.id] = smooth;
+      const pid = p.id;
+      const arr = series[pid] ?? Array.from({ length: points }, () => 0);
+      const prevSmooth = emaRef.current[pid] ?? arr[arr.length - 1] ?? 0;
+      const raw = latestProfits[pid] ?? prevSmooth;
+
+      // if this pid should step, use raw; else EMA
+      const nextVal = stepSet.has(pid) ? raw : ema * prevSmooth + (1 - ema) * raw;
+      if (!stepSet.has(pid)) emaRef.current[pid] = nextVal;
 
       const tail = arr.slice(1);
-      tail.push(smooth);
-      target[p.id] = tail;
+      tail.push(nextVal);
+      target[pid] = tail;
     });
 
+    // if tween is disabled for others entirely, just set immediately
+    if (!tweenOthers) {
+      setSeries(target);
+      fromRef.current = target;
+      toRef.current = target;
+      tRef.current = 1;
+      return;
+    }
+
+    // otherwise tween only non-step ids; step ids jump instantly
     fromRef.current = series;
     toRef.current = target;
     tRef.current = 0;
 
-    // start tween (700ms looks nice)
-    const DURATION = 700;
+    const DURATION = Math.max(0, tweenMs);
     const loop = (ts: number) => {
       if (lastTsRef.current == null) lastTsRef.current = ts;
       const dt = ts - lastTsRef.current;
       lastTsRef.current = ts;
 
       if (tRef.current < 1) {
-        tRef.current = Math.min(1, tRef.current + dt / DURATION);
+        tRef.current = Math.min(1, tRef.current + (DURATION ? dt / DURATION : 1));
         const eased = easeOutCubic(tRef.current);
+
         const blended: Record<string, number[]> = {};
         for (const pid of Object.keys(toRef.current)) {
-          blended[pid] = lerpSeries(fromRef.current[pid], toRef.current[pid], eased);
+          if (stepSet.has(pid)) {
+            // step lines: snap to target immediately
+            blended[pid] = toRef.current[pid];
+          } else {
+            blended[pid] = DURATION ? lerpSeries(fromRef.current[pid], toRef.current[pid], eased) : toRef.current[pid];
+          }
         }
         setSeries(blended);
         rafRef.current = requestAnimationFrame(loop);
       } else {
-        // finish
         setSeries(toRef.current);
         lastTsRef.current = null;
       }
     };
+
     rafRef.current && cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(loop);
 
@@ -168,7 +197,7 @@ export default function LeaderboardCombinedChart({
       lastTsRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settleSignal]); // only when parent signals a settle
+  }, [settleSignal, players, latestProfits, ema, points, tweenOthers, tweenMs, stepIds]);
 
   // y domain & standings
   const { minY, maxY, latest } = useMemo(() => {
@@ -180,11 +209,8 @@ export default function LeaderboardCombinedChart({
         if (v > maxV) maxV = v;
       }
     });
-    if (!isFinite(minV) || !isFinite(maxV)) {
-      minV = 0;
-      maxV = 1;
-    }
-    const pad = (maxV - minV) * 0.12 + 0.6;
+    if (!isFinite(minV) || !isFinite(maxV)) { minV = 0; maxV = 1; }
+    const pad = (maxV - minY0(minV, maxV)) * 0.12 + 0.6; // guard against tiny ranges
     const lo = minV - pad;
     const hi = Math.max(lo + 1, maxV + pad);
 
@@ -194,6 +220,10 @@ export default function LeaderboardCombinedChart({
 
     return { minY: lo, maxY: hi, latest };
   }, [series, players]);
+
+  function minY0(minV: number, maxV: number) {
+    return Number.isFinite(minV) && Number.isFinite(maxV) ? minV : 0;
+  }
 
   const valueToY = (val: number) => {
     const t = (val - minY) / (maxY - minY || 1);
@@ -218,17 +248,16 @@ export default function LeaderboardCombinedChart({
     if (!interactive || !chartRef.current) return;
     const rect = chartRef.current.getBoundingClientRect();
     const x = clamp(e.clientX - rect.left, 0, rect.width);
-    const idx = Math.round((x / rect.width) * ((series[players[0]?.id ?? ""]?.length ?? points) - 1));
+    const id0 = players[0]?.id ?? "";
+    const len = series[id0]?.length ?? points;
+    const idx = Math.round((x / rect.width) * (len - 1));
     setHoverIdx(idx);
   };
   const onLeave = () => setHoverIdx(null);
 
   const hoverRows = useMemo(() => {
     if (hoverIdx == null) return null;
-    const rows = players.map((p) => ({
-      ...p,
-      val: series[p.id]?.[hoverIdx] ?? 0,
-    }));
+    const rows = players.map((p) => ({ ...p, val: series[p.id]?.[hoverIdx] ?? 0 }));
     rows.sort((a, b) => b.val - a.val);
     return rows;
   }, [hoverIdx, series, players]);
