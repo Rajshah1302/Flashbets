@@ -2,29 +2,21 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-/* ---------- Types ---------- */
 export type LBPlayer = { id: string; name: string; color: string; width?: number; z?: number };
 
 type Props = {
   players: LBPlayer[];
-  /** latest absolute profit/loss per player (e.g., { you: 12.5, alpha: 9.2 }) */
   latestProfits: Record<string, number>;
-  /** increment this when a round settles (keeps chart in sync with your 5s cadence) */
-  settleSignal: number;
-  /** window length */
+  settleSignal: number;          // increment on each 5s settle
+  roundProgress?: number;        // 0..1 from parent timer (syncs progress bar)
   points?: number;
-  /** EMA smoothing factor [0..1], higher = smoother (applies to non-step ids) */
-  ema?: number;
-  /** chart height */
+  ema?: number;                  // only for non-step ids
   height?: number | string;
-  /** show crosshair + tooltip */
   interactive?: boolean;
-  /** players that should step instantly to raw value on settle (no EMA, no tween) */
-  stepIds?: string[];
-  /** tween only the non-step lines */
-  tweenOthers?: boolean;
-  /** tween duration for non-step lines */
-  tweenMs?: number;
+  stepIds?: string[];            // step (no EMA, no tween) lines -> defaults ["you"]
+  tweenOthers?: boolean;         // tween only non-step lines
+  tweenMs?: number;              // tween duration for non-step lines
+  persistKey?: string;           // localStorage key for series/window
 };
 
 /* ---------- Utils ---------- */
@@ -63,22 +55,28 @@ function toSmoothPath(points: Array<{ x: number; y: number }>, tension = 0.55) {
   return path.join(" ");
 }
 
+function toPointsString(arr: number[], fn: (v: number, i: number, n: number) => { x: number; y: number }) {
+  const n = arr.length || 1;
+  return arr.map((v, i) => {
+    const { x, y } = fn(v, i, n);
+    return `${x},${y}`;
+  }).join(" ");
+}
+
 function lerpSeries(a: number[], b: number[], t: number) {
   const n = Math.min(a.length, b.length);
   const out = new Array(n);
   for (let i = 0; i < n; i++) out[i] = a[i] + (b[i] - a[i]) * t;
   return out;
 }
-
-function easeOutCubic(t: number) {
-  return 1 - Math.pow(1 - t, 3);
-}
+const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
 
 /* ---------- Component ---------- */
 export default function LeaderboardCombinedChart({
   players,
   latestProfits,
   settleSignal,
+  roundProgress,
   points = 64,
   ema = 0.85,
   height = 420,
@@ -86,9 +84,12 @@ export default function LeaderboardCombinedChart({
   stepIds = ["you"],
   tweenOthers = true,
   tweenMs = 700,
+  persistKey,
 }: Props) {
-  // init window using current profits (or 0 if missing)
+  /* ---- hydrate series from localStorage once ---- */
+  const hydratedRef = useRef(false);
   const [series, setSeries] = useState<Record<string, number[]>>(() => {
+    // initial: flat window at current value
     const init: Record<string, number[]> = {};
     players.forEach((p) => {
       const base = latestProfits[p.id] ?? 0;
@@ -97,49 +98,85 @@ export default function LeaderboardCombinedChart({
     return init;
   });
 
-  // ensure new players have a series
+  // one-time hydration
+  useEffect(() => {
+    if (!persistKey || hydratedRef.current) return;
+    hydratedRef.current = true;
+    try {
+      const raw = localStorage.getItem(persistKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { points: number; data: Record<string, number[]> };
+      const stored = parsed?.data ?? {};
+      // normalize to current players & points
+      const next: Record<string, number[]> = {};
+      players.forEach((p) => {
+        const arr = stored[p.id] ?? Array.from({ length: points }, () => latestProfits[p.id] ?? 0);
+        const trimmed = arr.slice(-points);
+        while (trimmed.length < points) trimmed.unshift(trimmed[0] ?? 0);
+        next[p.id] = trimmed;
+      });
+      setSeries(next);
+    } catch {
+      /* ignore bad storage */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persistKey]);
+
+  // keep new players safe
   useEffect(() => {
     setSeries((prev) => {
-      const next: Record<string, number[]> = { ...prev };
+      const next = { ...prev };
       players.forEach((p) => {
         if (!next[p.id]) {
           const base = latestProfits[p.id] ?? 0;
           next[p.id] = Array.from({ length: points }, () => base);
+        } else if (next[p.id].length !== points) {
+          const trimmed = next[p.id].slice(-points);
+          while (trimmed.length < points) trimmed.unshift(trimmed[0] ?? 0);
+          next[p.id] = trimmed;
         }
+      });
+      // drop series for removed players
+      Object.keys(next).forEach((pid) => {
+        if (!players.find((p) => p.id === pid)) delete next[pid];
       });
       return next;
     });
   }, [players, points, latestProfits]);
 
-  // EMA state (for non-step ids)
+  // persist on any series change
+  useEffect(() => {
+    if (!persistKey) return;
+    try {
+      localStorage.setItem(persistKey, JSON.stringify({ points, data: series }));
+    } catch {/* ignore quota */}
+  }, [series, persistKey, points]);
+
+  // EMA state for non-step ids
   const emaRef = useRef<Record<string, number>>({});
   useEffect(() => {
     const init: Record<string, number> = {};
     players.forEach((p) => (init[p.id] = series[p.id]?.[series[p.id].length - 1] ?? 0));
     emaRef.current = init;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // once at mount
+  }, []); // mount
 
   // tween state
-  const fromRef = useRef<Record<string, number[]>>(series);
-  const toRef = useRef<Record<string, number[]>>(series);
+  const fromRef = useRef(series);
+  const toRef = useRef(series);
   const tRef = useRef(1);
   const rafRef = useRef<number | null>(null);
   const lastTsRef = useRef<number | null>(null);
 
-  // on each settle: push latest profits; stepIds go raw (no EMA) and no tween
+  // apply settle: stepIds jump (no EMA, no tween). Others optionally tween from EMA-smoothed value.
   useEffect(() => {
     const stepSet = new Set(stepIds);
-
-    // compute new target series
     const target: Record<string, number[]> = {};
     players.forEach((p) => {
       const pid = p.id;
       const arr = series[pid] ?? Array.from({ length: points }, () => 0);
       const prevSmooth = emaRef.current[pid] ?? arr[arr.length - 1] ?? 0;
       const raw = latestProfits[pid] ?? prevSmooth;
-
-      // if this pid should step, use raw; else EMA
       const nextVal = stepSet.has(pid) ? raw : ema * prevSmooth + (1 - ema) * raw;
       if (!stepSet.has(pid)) emaRef.current[pid] = nextVal;
 
@@ -148,7 +185,6 @@ export default function LeaderboardCombinedChart({
       target[pid] = tail;
     });
 
-    // if tween is disabled for others entirely, just set immediately
     if (!tweenOthers) {
       setSeries(target);
       fromRef.current = target;
@@ -157,29 +193,24 @@ export default function LeaderboardCombinedChart({
       return;
     }
 
-    // otherwise tween only non-step ids; step ids jump instantly
     fromRef.current = series;
     toRef.current = target;
     tRef.current = 0;
 
-    const DURATION = Math.max(0, tweenMs);
+    const D = Math.max(0, tweenMs);
     const loop = (ts: number) => {
       if (lastTsRef.current == null) lastTsRef.current = ts;
       const dt = ts - lastTsRef.current;
       lastTsRef.current = ts;
 
       if (tRef.current < 1) {
-        tRef.current = Math.min(1, tRef.current + (DURATION ? dt / DURATION : 1));
+        tRef.current = Math.min(1, tRef.current + (D ? dt / D : 1));
         const eased = easeOutCubic(tRef.current);
-
         const blended: Record<string, number[]> = {};
         for (const pid of Object.keys(toRef.current)) {
-          if (stepSet.has(pid)) {
-            // step lines: snap to target immediately
-            blended[pid] = toRef.current[pid];
-          } else {
-            blended[pid] = DURATION ? lerpSeries(fromRef.current[pid], toRef.current[pid], eased) : toRef.current[pid];
-          }
+          blended[pid] = stepSet.has(pid)
+            ? toRef.current[pid] // snap
+            : (D ? lerpSeries(fromRef.current[pid], toRef.current[pid], eased) : toRef.current[pid]);
         }
         setSeries(blended);
         rafRef.current = requestAnimationFrame(loop);
@@ -197,20 +228,15 @@ export default function LeaderboardCombinedChart({
       lastTsRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settleSignal, players, latestProfits, ema, points, tweenOthers, tweenMs, stepIds]);
+  }, [settleSignal, players, latestProfits, ema, points, tweenOthers, tweenMs, stepIds.join("|")]);
 
-  // y domain & standings
+  // y-domain & standings
   const { minY, maxY, latest } = useMemo(() => {
     let minV = Number.POSITIVE_INFINITY;
     let maxV = Number.NEGATIVE_INFINITY;
-    Object.values(series).forEach((arr) => {
-      for (const v of arr) {
-        if (v < minV) minV = v;
-        if (v > maxV) maxV = v;
-      }
-    });
+    Object.values(series).forEach((arr) => { for (const v of arr) { if (v < minV) minV = v; if (v > maxV) maxV = v; } });
     if (!isFinite(minV) || !isFinite(maxV)) { minV = 0; maxV = 1; }
-    const pad = (maxV - minY0(minV, maxV)) * 0.12 + 0.6; // guard against tiny ranges
+    const pad = (maxV - minV) * 0.12 + 0.6;
     const lo = minV - pad;
     const hi = Math.max(lo + 1, maxV + pad);
 
@@ -221,25 +247,27 @@ export default function LeaderboardCombinedChart({
     return { minY: lo, maxY: hi, latest };
   }, [series, players]);
 
-  function minY0(minV: number, maxV: number) {
-    return Number.isFinite(minV) && Number.isFinite(maxV) ? minV : 0;
-  }
+  const valueToY = (val: number) => clamp(100 - ((val - minY) / (maxY - minY || 1)) * 100, 0, 100);
 
-  const valueToY = (val: number) => {
-    const t = (val - minY) / (maxY - minY || 1);
-    return clamp(100 - t * 100, 0, 100);
-  };
-
-  const paths = useMemo(() => {
-    const map: Record<string, string> = {};
+  // paths: stepIds -> polyline (keeps flats flat); others -> smooth Bézier
+  const { polylines, smoothPaths, seriesLen } = useMemo(() => {
+    const id0 = players[0]?.id ?? "";
+    const len = series[id0]?.length ?? points;
+    const poly: Record<string, string> = {};
+    const smooth: Record<string, string> = {};
+    const stepSet = new Set(stepIds);
     for (const p of players) {
       const arr = series[p.id] ?? [];
-      const n = arr.length || 1;
-      const pts = arr.map((v, i) => ({ x: (i / (n - 1)) * 100, y: valueToY(v) }));
-      map[p.id] = toSmoothPath(pts, 0.55);
+      const ptsFn = (v: number, i: number, n: number) => ({ x: (i / (n - 1)) * 100, y: valueToY(v) });
+      if (stepSet.has(p.id)) {
+        poly[p.id] = toPointsString(arr, ptsFn);
+      } else {
+        const pts = arr.map((v, i) => ptsFn(v, i, arr.length));
+        smooth[p.id] = toSmoothPath(pts, 0.55);
+      }
     }
-    return map;
-  }, [series, players, minY, maxY]);
+    return { polylines: poly, smoothPaths: smooth, seriesLen: len };
+  }, [series, players, points, minY, maxY, stepIds]);
 
   // hover
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
@@ -248,9 +276,7 @@ export default function LeaderboardCombinedChart({
     if (!interactive || !chartRef.current) return;
     const rect = chartRef.current.getBoundingClientRect();
     const x = clamp(e.clientX - rect.left, 0, rect.width);
-    const id0 = players[0]?.id ?? "";
-    const len = series[id0]?.length ?? points;
-    const idx = Math.round((x / rect.width) * (len - 1));
+    const idx = Math.round((x / rect.width) * (seriesLen - 1));
     setHoverIdx(idx);
   };
   const onLeave = () => setHoverIdx(null);
@@ -264,10 +290,22 @@ export default function LeaderboardCombinedChart({
 
   const ticks = useMemo(() => niceTicks(minY, maxY, 5), [minY, maxY]);
 
-  const seriesLen = series[players[0]?.id ?? ""]?.length ?? points;
-
   return (
     <div className="relative bg-gray-900/30 border border-gray-800/60 rounded-xl overflow-hidden">
+      {/* synced progress (optional) */}
+      {typeof roundProgress === "number" && (
+        <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800/60 bg-black/30">
+          <div className="text-xs text-gray-400 font-semibold">Max Profit Leaderboard</div>
+          <div className="flex items-center gap-2 text-[11px] text-gray-400 font-mono">
+            <span>Next settle</span>
+            <div className="w-24 h-1.5 bg-gray-800/60 rounded">
+              <div className="h-full bg-amber-500 rounded transition-[width]" style={{ width: `${clamp(roundProgress, 0, 1) * 100}%` }} />
+            </div>
+            <span>{((1 - clamp(roundProgress, 0, 1)) * 5).toFixed(1)}s</span>
+          </div>
+        </div>
+      )}
+
       <div
         ref={chartRef}
         onMouseMove={onMove}
@@ -275,13 +313,7 @@ export default function LeaderboardCombinedChart({
         className="relative"
         style={{ height: typeof height === "number" ? `${height}px` : height }}
       >
-        <svg
-          className="absolute inset-0 w-full h-full"
-          viewBox="0 0 100 100"
-          preserveAspectRatio="none"
-          role="img"
-          aria-label="Leaderboard PnL chart"
-        >
+        <svg className="absolute inset-0 w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Leaderboard PnL chart">
           <defs>
             {players.map((p) => (
               <linearGradient key={p.id} id={`grad-${p.id}`} x1="0" x2="100" y1="0" y2="0" gradientUnits="userSpaceOnUse">
@@ -292,10 +324,7 @@ export default function LeaderboardCombinedChart({
             ))}
             <filter id="glow-you">
               <feGaussianBlur stdDeviation="1.2" result="blur" />
-              <feMerge>
-                <feMergeNode in="blur" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
+              <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
             </filter>
           </defs>
 
@@ -314,24 +343,38 @@ export default function LeaderboardCombinedChart({
           {/* NOW divider at right */}
           <line x1="100" x2="100" y1="0" y2="100" stroke="#9CA3AF" strokeWidth="0.6" strokeDasharray="1.4 1.4" opacity="0.7" />
 
-          {/* lines */}
+          {/* lines: polylines for stepIds (flat segments), smooth paths for others */}
           {players
             .slice()
             .sort((a, b) => (a.z ?? 0) - (b.z ?? 0))
-            .map((p) => (
-              <path
-                key={p.id}
-                d={paths[p.id]}
-                fill="none"
-                stroke={`url(#grad-${p.id})`}
-                strokeWidth={p.width ?? 1.8}
-                strokeLinejoin="round"
-                strokeLinecap="round"
-                vectorEffect="non-scaling-stroke"
-                opacity={p.id === "you" ? 1 : 0.92}
-                filter={p.id === "you" ? "url(#glow-you)" : undefined}
-              />
-            ))}
+            .map((p) =>
+              stepIds.includes(p.id) ? (
+                <polyline
+                  key={p.id}
+                  points={polylines[p.id]}
+                  fill="none"
+                  stroke={`url(#grad-${p.id})`}
+                  strokeWidth={p.width ?? 2}
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  vectorEffect="non-scaling-stroke"
+                  opacity={1}
+                  filter={p.id === "you" ? "url(#glow-you)" : undefined}
+                />
+              ) : (
+                <path
+                  key={p.id}
+                  d={smoothPaths[p.id]}
+                  fill="none"
+                  stroke={`url(#grad-${p.id})`}
+                  strokeWidth={p.width ?? 1.8}
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  vectorEffect="non-scaling-stroke"
+                  opacity={0.92}
+                />
+              )
+            )}
 
           {/* end dots + labels */}
           {players.map((p) => {
@@ -341,24 +384,18 @@ export default function LeaderboardCombinedChart({
             return (
               <g key={`${p.id}-dot`}>
                 <circle cx="100" cy={y} r={isYou ? 2.3 : 1.8} fill={p.color} />
-                <text x="98" y={y - 2.5} textAnchor="end" fontSize="3" fill={p.color}>
-                  {p.name}
-                </text>
+                <text x="98" y={y - 2.5} textAnchor="end" fontSize="3" fill={p.color}>{p.name}</text>
               </g>
             );
           })}
 
-          {/* hover */}
+          {/* hover crosshair */}
           {interactive && hoverIdx != null && (
             <line
               x1={(hoverIdx / (seriesLen - 1)) * 100}
               x2={(hoverIdx / (seriesLen - 1)) * 100}
-              y1="0"
-              y2="100"
-              stroke="#F59E0B"
-              strokeOpacity="0.35"
-              strokeWidth="0.5"
-              strokeDasharray="1.2 1.2"
+              y1="0" y2="100"
+              stroke="#F59E0B" strokeOpacity="0.35" strokeWidth="0.5" strokeDasharray="1.2 1.2"
             />
           )}
         </svg>
@@ -384,7 +421,7 @@ export default function LeaderboardCombinedChart({
         )}
       </div>
 
-      {/* mini standings footer */}
+      {/* mini standings */}
       <div className="px-3 py-2 border-t border-gray-800/60 bg-black/20">
         <div className="flex flex-wrap gap-3 text-xs">
           {latest.map((l, i) => (
