@@ -826,117 +826,143 @@ export default function PredictionMarketUI() {
         </div>
 
         {/* ===== BELOW EVERYTHING: Active & Past Bets ===== */}
-        <div className="mt-8 space-y-8">
-          {/* Active Bets */}
+        <div className="mt-8">
+          {/* Combined Bets (Active + Past) */}
           <section className="bg-gray-900/30 border border-gray-800/50 rounded-xl p-4">
-            <h3 className="text-sm font-semibold text-gray-200 mb-3">
-              Active Bets
-            </h3>
-            {activeBets.length === 0 ? (
-              <div className="text-xs text-gray-500">No active bets yet.</div>
-            ) : (
-              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {activeBets.map((b) => (
-                  <div
-                    key={b.roundId}
-                    className="border border-gray-800 rounded p-3 bg-black/20"
-                  >
-                    <div className="flex items-center justify-between text-xs">
-                      <div className="font-mono text-gray-400">
-                        Round #{b.roundId}
-                      </div>
-                      <div className="font-medium">{b.label}</div>
-                    </div>
-                    <div className="mt-1 grid grid-cols-3 gap-2 text-[11px]">
-                      <div className="text-gray-500">You</div>
-                      <div className="text-gray-500">Pool</div>
-                      <div className="text-gray-500">Est. Win</div>
-                      <div className="font-mono">${formatUSD(b.amount)}</div>
-                      <div className="font-mono">${formatUSD(b.pool)}</div>
-                      <div className="font-mono">${formatUSD(b.estPayout)}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
+            <h3 className="text-sm font-semibold text-gray-200 mb-3">Bets</h3>
 
-          {/* Past Bets */}
-          <section className="bg-gray-900/30 border border-gray-800/50 rounded-xl p-4">
-            <h3 className="text-sm font-semibold text-gray-200 mb-3">
-              Past Bets
-            </h3>
-            {betHistory.length === 0 ? (
-              <div className="text-xs text-gray-500">No settled bets yet.</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-xs">
-                  <thead className="text-gray-500">
-                    <tr className="[&>th]:text-left [&>th]:font-medium [&>th]:px-3 [&>th]:py-2">
-                      <th>Round</th>
-                      <th>Bucket</th>
-                      <th>You</th>
-                      <th>Payout</th>
-                      <th>Profit</th>
-                      <th>Δ%</th>
-                      <th>Price</th>
-                      <th>Result</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[...betHistory].reverse().map((h) => (
-                      <tr
-                        key={`${h.roundId}-${h.label}-${h.result}`}
-                        className="border-t border-gray-800/60"
-                      >
-                        <td className="px-3 py-2 font-mono text-gray-400">
-                          #{h.roundId}
-                        </td>
-                        <td className="px-3 py-2">{h.label}</td>
-                        <td className="px-3 py-2 font-mono">
-                          ${formatUSD(h.amount)}
-                        </td>
-                        <td className="px-3 py-2 font-mono">
-                          ${formatUSD(h.payout)}
-                        </td>
-                        <td
-                          className={`px-3 py-2 font-mono ${
-                            h.profit >= 0 ? "text-amber-300" : "text-red-300"
-                          }`}
-                        >
-                          {h.profit >= 0 ? "+" : "-"}$
-                          {formatUSD(Math.abs(h.profit))}
-                        </td>
-                        <td
-                          className={`px-3 py-2 font-mono ${
-                            h.changePct >= 0
-                              ? "text-emerald-300"
-                              : "text-red-300"
-                          }`}
-                        >
-                          {h.changePct >= 0 ? "+" : ""}
-                          {h.changePct.toFixed(2)}%
-                        </td>
-                        <td className="px-3 py-2 font-mono">
-                          ${formatUSD(h.price)}
-                        </td>
-                        <td className="px-3 py-2">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[11px] ${
-                              h.result === "win"
-                                ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/30"
-                                : "bg-red-500/10 text-red-300 border border-red-500/30"
-                            }`}
+            {(() => {
+              const dash = "—";
+
+              // Build unified rows: Active first (pending), then Past (most recent first)
+              const rows = [
+                // Active (pending)
+                ...activeBets.map((b) => ({
+                  key: `active-${b.roundId}`,
+                  roundId: b.roundId,
+                  label: b.label,
+                  you: b.amount,
+                  pool: b.pool,
+                  estOrPayout: b.estPayout,
+                  profit: null,
+                  changePct: null,
+                  price: null,
+                  status: "Pending",
+                  statusClass:
+                    "bg-amber-500/10 text-amber-300 border border-amber-500/30",
+                })),
+                // Past (settled)
+                ...[...betHistory].reverse().map((h) => ({
+                  key: `hist-${h.roundId}-${h.result}`,
+                  roundId: h.roundId,
+                  label: h.label,
+                  you: h.amount,
+                  pool: null,
+                  estOrPayout: h.payout,
+                  profit: h.profit,
+                  changePct: h.changePct,
+                  price: h.price,
+                  status: h.result === "win" ? "Won" : "Lost",
+                  statusClass:
+                    h.result === "win"
+                      ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/30"
+                      : "bg-red-500/10 text-red-300 border border-red-500/30",
+                })),
+              ];
+
+              if (rows.length === 0) {
+                return (
+                  <div className="text-xs text-gray-500">No bets yet.</div>
+                );
+              }
+
+              return (
+                <div className="overflow-x-auto">
+                  {/* Internal scroll container */}
+                  <div className="max-h-96 overflow-y-auto rounded-md">
+                    <table className="min-w-full text-xs">
+                      <thead className="text-gray-500 sticky top-0 z-10 bg-black/40 backdrop-blur">
+                        <tr className="[&>th]:text-left [&>th]:font-medium [&>th]:px-3 [&>th]:py-2">
+                          <th>Round</th>
+                          <th>Bucket</th>
+                          <th>You</th>
+                          <th>Pool</th>
+                          <th>Est./Payout</th>
+                          <th>Profit</th>
+                          <th>Δ%</th>
+                          <th>Price</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((r) => (
+                          <tr
+                            key={r.key}
+                            className="border-t border-gray-800/60"
                           >
-                            {h.result.toUpperCase()}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                            <td className="px-3 py-2 font-mono text-gray-400">
+                              #{r.roundId}
+                            </td>
+                            <td className="px-3 py-2">{r.label}</td>
+                            <td className="px-3 py-2 font-mono">
+                              ${formatUSD(r.you)}
+                            </td>
+                            <td className="px-3 py-2 font-mono">
+                              {r.pool != null ? `$${formatUSD(r.pool)}` : dash}
+                            </td>
+                            <td className="px-3 py-2 font-mono">
+                              ${formatUSD(r.estOrPayout)}
+                            </td>
+                            <td
+                              className={`px-3 py-2 font-mono ${
+                                r.profit == null
+                                  ? "text-gray-400"
+                                  : r.profit >= 0
+                                  ? "text-amber-300"
+                                  : "text-red-300"
+                              }`}
+                            >
+                              {r.profit == null
+                                ? dash
+                                : `${r.profit >= 0 ? "+" : "-"}$${formatUSD(
+                                    Math.abs(r.profit)
+                                  )}`}
+                            </td>
+                            <td
+                              className={`px-3 py-2 font-mono ${
+                                r.changePct == null
+                                  ? "text-gray-400"
+                                  : r.changePct >= 0
+                                  ? "text-emerald-300"
+                                  : "text-red-300"
+                              }`}
+                            >
+                              {r.changePct == null
+                                ? dash
+                                : `${
+                                    r.changePct >= 0 ? "+" : ""
+                                  }${r.changePct.toFixed(2)}%`}
+                            </td>
+                            <td className="px-3 py-2 font-mono">
+                              {r.price == null
+                                ? dash
+                                : `$${formatUSD(r.price)}`}
+                            </td>
+                            <td className="px-3 py-2">
+                              <span
+                                className={`px-2 py-0.5 rounded ${r.statusClass}`}
+                              >
+                                {r.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })()}
           </section>
         </div>
       </div>
