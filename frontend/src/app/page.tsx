@@ -2,76 +2,39 @@
 
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { Wallet, Clock, Activity } from "lucide-react";
+import LeaderboardCombinedChart, { LBPlayer } from "@/components/Leaderboard";
 
-const VISIBLE_ROUNDS = 12; // total columns
-const GRAPH_COLS = VISIBLE_ROUNDS / 2; // left half (6) = graph
-const CURRENT_COL = GRAPH_COLS; // idx 6 is always the "current" round (locked)
+/* ===== existing constants ===== */
+const VISIBLE_ROUNDS = 12;
+const GRAPH_COLS = VISIBLE_ROUNDS / 2;
+const CURRENT_COL = GRAPH_COLS;
 const REVEAL_EVERY_SECONDS = 5;
 const REVEAL_MS = REVEAL_EVERY_SECONDS * 1000;
 
-// betting config
 const MIN_BET = 0.25;
 const QUICK_BETS = [0.25, 0.5, 1, 2, 5, 10, 25, 50];
 
-function toCents(n: number) {
-  return Math.round(n * 100);
-}
-function fromCents(c: number) {
-  return c / 100;
-}
-
+/* ===== helpers ===== */
+function toCents(n: number) { return Math.round(n * 100); }
+function fromCents(c: number) { return c / 100; }
 function formatUSD(n: number, opts: Intl.NumberFormatOptions = {}) {
-  return n.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-    ...opts,
-  });
+  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2, ...opts });
 }
-
 function newRound(id: number) {
   return {
-    id,
-    revealed: false,
-    settled: false,
-    price: null as number | null,
-    changePct: null as number | null,
-    winningBucket: null as number | null,
+    id, revealed: false, settled: false,
+    price: null as number | null, changePct: null as number | null, winningBucket: null as number | null,
     buckets: [
-      {
-        id: 0,
-        label: "Strong Bull",
-        bets: Math.floor(Math.random() * 500) + 100,
-        userBet: null as number | null,
-      },
-      {
-        id: 1,
-        label: "Bull",
-        bets: Math.floor(Math.random() * 400) + 100,
-        userBet: null as number | null,
-      },
-      {
-        id: 2,
-        label: "Bear",
-        bets: Math.floor(Math.random() * 400) + 100,
-        userBet: null as number | null,
-      },
-      {
-        id: 3,
-        label: "Strong Bear",
-        bets: Math.floor(Math.random() * 500) + 100,
-        userBet: null as number | null,
-      },
+      { id: 0, label: "Strong Bull", bets: Math.floor(Math.random() * 500) + 100, userBet: null as number | null },
+      { id: 1, label: "Bull",        bets: Math.floor(Math.random() * 400) + 100, userBet: null as number | null },
+      { id: 2, label: "Bear",        bets: Math.floor(Math.random() * 400) + 100, userBet: null as number | null },
+      { id: 3, label: "Strong Bear", bets: Math.floor(Math.random() * 500) + 100, userBet: null as number | null },
     ],
   };
 }
-
 function seedRounds(startId: number) {
-  return Array.from({ length: VISIBLE_ROUNDS }, (_, i) =>
-    newRound(startId + i)
-  );
+  return Array.from({ length: VISIBLE_ROUNDS }, (_, i) => newRound(startId + i));
 }
-
-// % → bucket (for payouts + band highlight)
 function bucketFromChange(pct: number) {
   if (pct > 0.5) return 0;
   if (pct >= 0.1) return 1;
@@ -79,9 +42,28 @@ function bucketFromChange(pct: number) {
   if (pct <= -0.1) return 2;
   return pct >= 0 ? 1 : 2;
 }
-
-// bucket → center Y (% of height)
 const bucketCenterY = (bucket: number) => bucket * 25 + 12.5;
+
+/* ===== NEW: betting/leaderboard toggle ===== */
+function MarketViewToggle({
+  mode, onChange,
+}: { mode: "betting" | "leaderboard"; onChange: (m: "betting" | "leaderboard") => void }) {
+  return (
+    <div className="inline-flex rounded-md border border-gray-700 overflow-hidden">
+      {(["betting", "leaderboard"] as const).map((m) => (
+        <button
+          key={m}
+          onClick={() => onChange(m)}
+          className={`px-3 py-1.5 text-xs font-medium transition ${
+            mode === m ? "bg-amber-500/10 text-amber-300" : "text-gray-400 hover:text-gray-200"
+          }`}
+        >
+          {m === "betting" ? "Betting Zone" : "Leaderboard"}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 export default function PredictionMarketUI() {
   const markets = [
@@ -96,60 +78,62 @@ export default function PredictionMarketUI() {
   const [userBalance, setUserBalance] = useState(125.5);
   const initialBalanceRef = useRef(125.5);
 
-  // fractional bet amount with quick chips
   const [betAmount, setBetAmount] = useState<number>(5);
-
-  // totals for the right panel
-  const [totalStaked, setTotalStaked] = useState(0); // gross amount wagered
-  const [totalWinnings, setTotalWinnings] = useState(0); // gross payouts collected
-
+  const [totalStaked, setTotalStaked] = useState(0);
+  const [totalWinnings, setTotalWinnings] = useState(0);
   const [timeLeft, setTimeLeft] = useState(REVEAL_EVERY_SECONDS);
-
-  // fixed 12 columns; left 6 = graph, index 6 = current (locked), right 5 = future (bettable)
   const [rounds, setRounds] = useState(() => seedRounds(10423));
-
-  // stats
   const [wins, setWins] = useState(0);
   const [completedBets, setCompletedBets] = useState(0);
 
-  // NEW: store settled bets for the “Past Bets” section
   type HistoryRow = {
-    roundId: number;
-    label: string;
-    amount: number;
-    payout: number;
-    profit: number;
-    result: "win" | "lose";
-    price: number;
-    changePct: number;
+    roundId: number; label: string; amount: number; payout: number; profit: number; result: "win" | "lose"; price: number; changePct: number;
   };
   const [betHistory, setBetHistory] = useState<HistoryRow[]>([]);
 
-  // toast
-  const [toast, setToast] = useState<null | {
-    type: "win" | "lose" | "info";
-    amount?: number;
-    message?: string;
-  }>(null);
-  useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(null), 2200);
-    return () => clearTimeout(t);
-  }, [toast]);
+  const [toast, setToast] = useState<null | { type: "win" | "lose" | "info"; amount?: number; message?: string }>(null);
+  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 2200); return () => clearTimeout(t); }, [toast]);
 
-  // fresh state refs + gating
+  // fresh refs
   const latestPriceRef = useRef(initialPrice);
   const roundsRef = useRef(rounds);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastRevealAtRef = useRef(0);
 
   const [priceHistory, setPriceHistory] = useState([initialPrice]);
-  useEffect(() => {
-    latestPriceRef.current = priceHistory[priceHistory.length - 1];
-  }, [priceHistory]);
-  useEffect(() => {
-    roundsRef.current = rounds;
-  }, [rounds]);
+  useEffect(() => { latestPriceRef.current = priceHistory[priceHistory.length - 1]; }, [priceHistory]);
+  useEffect(() => { roundsRef.current = rounds; }, [rounds]);
+
+  /* ===== NEW: view mode ===== */
+  const [viewMode, setViewMode] = useState<"betting" | "leaderboard">("betting");
+
+  /* ===== NEW: leaderboard players & live PnL ===== */
+  const leaderboardPlayers: LBPlayer[] = useMemo(
+    () => [
+      { id: "alpha", name: "Alpha", color: "#60a5fa", width: 1.8, z: 1 },
+      { id: "blaze", name: "Blaze", color: "#f472b6", width: 1.8, z: 2 },
+      { id: "nexus", name: "Nexus", color: "#34d399", width: 1.8, z: 3 },
+      { id: "you",   name: "You",   color: "#f59e0b", width: 2.4, z: 4 },
+    ],
+    []
+  );
+
+  // Others' PnL (mock gentle drift); You's PnL is derived from userBalance
+  const othersPnlRef = useRef<Record<string, number>>({
+    alpha: 8.5,
+    blaze: 6.2,
+    nexus: 5.1,
+  });
+
+  const [latestLeaderProfits, setLatestLeaderProfits] = useState<Record<string, number>>({
+    alpha: othersPnlRef.current.alpha,
+    blaze: othersPnlRef.current.blaze,
+    nexus: othersPnlRef.current.nexus,
+    you: 0,
+  });
+
+  // increments each settle → passed to LeaderboardCombinedChart
+  const [settleCounter, setSettleCounter] = useState(0);
 
   // reset on market change
   useEffect(() => {
@@ -160,12 +144,12 @@ export default function PredictionMarketUI() {
     setTimeLeft(REVEAL_EVERY_SECONDS);
     lastRevealAtRef.current = 0;
 
-    // keep balance, but reset stats/history for clarity per-market
-    setWins(0);
-    setCompletedBets(0);
-    setTotalStaked(0);
-    setTotalWinnings(0);
-    setBetHistory([]);
+    setWins(0); setCompletedBets(0); setTotalStaked(0); setTotalWinnings(0); setBetHistory([]);
+
+    // reset leaderboard PnL (others drift values)
+    othersPnlRef.current = { alpha: 8.5, blaze: 6.2, nexus: 5.1 };
+    setLatestLeaderProfits({ ...othersPnlRef.current, you: 0 });
+    setSettleCounter(0);
   }, [selectedMarket]);
 
   // timer / reveal
@@ -186,15 +170,13 @@ export default function PredictionMarketUI() {
           const newPrice = last * (1 + changePct / 100);
           const winningBucket = bucketFromChange(changePct);
 
-          // Settle current (index 6)
+          // settle current (index 6)
           const i = CURRENT_COL;
           const snapshot = roundsRef.current[i];
           if (snapshot && !snapshot.settled) {
             const totalPool = snapshot.buckets.reduce((s, b) => s + b.bets, 0);
             const winnerPool = snapshot.buckets[winningBucket].bets;
-            const userBetBucket = snapshot.buckets.find(
-              (b) => b.userBet != null
-            );
+            const userBetBucket = snapshot.buckets.find((b) => b.userBet != null);
             if (userBetBucket) {
               const stake = userBetBucket.userBet!;
               setCompletedBets((c) => c + 1);
@@ -206,57 +188,29 @@ export default function PredictionMarketUI() {
                 setToast({ type: "win", amount: payout - stake });
                 setTotalWinnings((tw) => tw + payout);
 
-                // log to history
                 setBetHistory((prev) => [
                   ...prev.slice(-99),
-                  {
-                    roundId: snapshot.id,
-                    label: userBetBucket.label,
-                    amount: stake,
-                    payout,
-                    profit: payout - stake,
-                    result: "win",
-                    price: newPrice,
-                    changePct,
-                  },
+                  { roundId: snapshot.id, label: userBetBucket.label, amount: stake, payout, profit: payout - stake, result: "win", price: newPrice, changePct },
                 ]);
               } else {
                 setToast({ type: "lose", amount: stake });
-
-                // log to history (loss)
                 setBetHistory((prev) => [
                   ...prev.slice(-99),
-                  {
-                    roundId: snapshot.id,
-                    label: userBetBucket.label,
-                    amount: stake,
-                    payout: 0,
-                    profit: -stake,
-                    result: "lose",
-                    price: newPrice,
-                    changePct,
-                  },
+                  { roundId: snapshot.id, label: userBetBucket.label, amount: stake, payout: 0, profit: -stake, result: "lose", price: newPrice, changePct },
                 ]);
               }
             }
           }
 
-          // reveal current, slide window
+          // slide rounds window
           setRounds((prev) => {
             let next = prev.slice();
             if (next[i]) {
-              next[i] = {
-                ...next[i],
-                revealed: true,
-                settled: true,
-                price: newPrice,
-                changePct,
-                winningBucket,
-              };
+              next[i] = { ...next[i], revealed: true, settled: true, price: newPrice, changePct, winningBucket };
             }
             const lastId = next[next.length - 1].id;
-            next = next.slice(1); // drop leftmost
-            next.push(newRound(lastId + 1)); // add new future
+            next = next.slice(1);
+            next.push(newRound(lastId + 1));
             return next;
           });
 
@@ -267,83 +221,77 @@ export default function PredictionMarketUI() {
             return extended;
           });
 
+          /* ===== NEW: update leaderboard PnL on settle ===== */
+          // Your PnL:
+          const youPnl = (prevUserBalance: number) => prevUserBalance - initialBalanceRef.current;
+
+          // others gentle drift (very small, keeps stability)
+          const drift = () => (Math.random() - 0.45) * 0.6; // approx -0.27..+0.33
+
+          othersPnlRef.current.alpha += drift();
+          othersPnlRef.current.blaze += drift();
+          othersPnlRef.current.nexus += drift();
+
+          setLatestLeaderProfits((prev) => ({
+            alpha: +othersPnlRef.current.alpha,
+            blaze: +othersPnlRef.current.blaze,
+            nexus: +othersPnlRef.current.nexus,
+            you: youPnl(userBalance), // use latest balance snapshot here
+          }));
+
+          // bump settle counter to notify chart
+          setSettleCounter((c) => c + 1);
+
           return REVEAL_EVERY_SECONDS;
         }
         return prev - 1;
       });
     }, 1000);
 
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, []);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [userBalance]);
 
-  // bet handler — only future rounds (idx > CURRENT_COL)
+  // place bet (unchanged)
   const handleBet = (roundIndex: number, bucketId: number) => {
     const r = rounds[roundIndex];
     if (!r || r.revealed) return;
-    if (roundIndex <= CURRENT_COL) return; // lock past + current
+    if (roundIndex <= CURRENT_COL) return;
 
-    // prevent multiple buckets in same round
-    const alreadyPlaced = r.buckets.some(
-      (b) => b.userBet != null && b.id !== bucketId
-    );
-    if (alreadyPlaced) {
-      setToast({
-        type: "info",
-        message: "You already placed a bet this round.",
-      });
-      return;
-    }
+    const alreadyPlaced = r.buckets.some((b) => b.userBet != null && b.id !== bucketId);
+    if (alreadyPlaced) { setToast({ type: "info", message: "You already placed a bet this round." }); return; }
 
     const v = Number.isFinite(betAmount) ? betAmount : MIN_BET;
     const clamped = Math.max(MIN_BET, Math.min(v, userBalance));
-    const amt = fromCents(toCents(clamped)); // round to cents
+    const amt = fromCents(toCents(clamped));
     if (amt <= 0) return;
 
-    // update balance + staking totals
     setUserBalance((prev) => fromCents(toCents(prev) - toCents(amt)));
     setTotalStaked((ts) => ts + amt);
 
     setRounds((prev) => {
       const updated = prev.slice();
       const round = updated[roundIndex];
-      const buckets = round.buckets.map((b) =>
-        b.id === bucketId
-          ? { ...b, userBet: (b.userBet ?? 0) + amt, bets: b.bets + amt }
-          : b
-      );
+      const buckets = round.buckets.map((b) => (b.id === bucketId ? { ...b, userBet: (b.userBet ?? 0) + amt, bets: b.bets + amt } : b));
       updated[roundIndex] = { ...round, buckets };
       return updated;
     });
   };
 
   const timerPct = (timeLeft / REVEAL_EVERY_SECONDS) * 100;
-  const lastPrice = priceHistory[priceHistory.length - 1];
   const pnl = userBalance - initialBalanceRef.current;
   const winRate = completedBets ? (wins / completedBets) * 100 : 0;
 
-  // Active (unsettled) bets derived from current rounds
+  // Active (unsettled) bets (unchanged)
   const activeBets = useMemo(() => {
     return rounds
       .map((r, idx) => ({ r, idx }))
-      .filter(
-        ({ idx, r }) =>
-          idx > CURRENT_COL && r.buckets.some((b) => b.userBet != null)
-      )
+      .filter(({ idx, r }) => idx > CURRENT_COL && r.buckets.some((b) => b.userBet != null))
       .map(({ r }) => {
         const b = r.buckets.find((bb) => bb.userBet != null)!;
         const totalPool = r.buckets.reduce((s, bb) => s + bb.bets, 0);
         const winnerPool = r.buckets[b.id].bets;
-        const potentialPayout =
-          totalPool * ((b.userBet ?? 0) / (winnerPool || 1));
-        return {
-          roundId: r.id,
-          label: r.buckets[b.id].label,
-          amount: b.userBet ?? 0,
-          pool: totalPool,
-          estPayout: potentialPayout,
-        };
+        const potentialPayout = totalPool * ((b.userBet ?? 0) / (winnerPool || 1));
+        return { roundId: r.id, label: r.buckets[b.id].label, amount: b.userBet ?? 0, pool: totalPool, estPayout: potentialPayout };
       });
   }, [rounds]);
 
@@ -361,23 +309,14 @@ export default function PredictionMarketUI() {
                 <span className="font-semibold text-lg">PredictX</span>
               </div>
 
-              <nav className="hidden md:flex items-center gap-6 text-sm">
-                <button className="text-amber-400 font-medium">Markets</button>
-                <button className="text-gray-400 hover:text-gray-200 transition">
-                  Leaderboard
-                </button>
-                <button className="text-gray-400 hover:text-gray-200 transition">
-                  History
-                </button>
-              </nav>
+              {/* NEW: toggle */}
+              <MarketViewToggle mode={viewMode} onChange={setViewMode} />
             </div>
 
             <div className="flex items-center gap-4">
               <div className="text-right">
                 <div className="text-xs text-gray-500">Balance</div>
-                <div className="font-mono font-semibold">
-                  ${formatUSD(userBalance)}
-                </div>
+                <div className="font-mono font-semibold">${formatUSD(userBalance)}</div>
               </div>
               <button className="bg-amber-500/10 border border-amber-500/20 text-amber-400 px-4 py-2 rounded-lg text-sm font-medium hover:bg-amber-500/20 transition flex items-center gap-2">
                 <Wallet className="w-4 h-4" />
@@ -389,10 +328,7 @@ export default function PredictionMarketUI() {
 
         {/* Timer progress */}
         <div className="h-1.5 bg-gray-800/60">
-          <div
-            className="h-full bg-amber-500 transition-all duration-1000"
-            style={{ width: `${timerPct}%` }}
-          />
+          <div className="h-full bg-amber-500 transition-all duration-1000" style={{ width: `${timerPct}%` }} />
         </div>
       </header>
 
@@ -401,19 +337,13 @@ export default function PredictionMarketUI() {
         <div className="fixed top-4 right-4 z-50">
           <div
             className={`px-4 py-3 rounded-lg shadow-lg border backdrop-blur-md ${
-              toast.type === "win"
-                ? "bg-amber-500/10 border-amber-500/30 text-amber-300"
-                : toast.type === "lose"
-                ? "bg-red-500/10 border-red-500/30 text-red-300"
-                : "bg-gray-700/40 border-gray-600/50 text-gray-200"
+              toast.type === "win" ? "bg-amber-500/10 border-amber-500/30 text-amber-300"
+              : toast.type === "lose" ? "bg-red-500/10 border-red-500/30 text-red-300"
+              : "bg-gray-700/40 border-gray-600/50 text-gray-200"
             }`}
           >
             <div className="text-sm font-semibold">
-              {toast.type === "win"
-                ? "You won!"
-                : toast.type === "lose"
-                ? "You lost"
-                : "Heads up"}
+              {toast.type === "win" ? "You won!" : toast.type === "lose" ? "You lost" : "Heads up"}
             </div>
             <div className="text-xs opacity-80 mt-0.5">
               {toast.type === "win" && typeof toast.amount === "number"
@@ -435,25 +365,17 @@ export default function PredictionMarketUI() {
                 key={m.id}
                 onClick={() => setSelectedMarket(m.id)}
                 className={`px-6 py-4 text-sm font-medium transition relative ${
-                  selectedMarket === m.id
-                    ? "text-amber-400"
-                    : "text-gray-400 hover:text-gray-200"
+                  selectedMarket === m.id ? "text-amber-400" : "text-gray-400 hover:text-gray-200"
                 }`}
               >
                 <div className="flex items-center gap-2">
                   <span className="text-lg">{m.icon}</span>
                   <span>{m.name}</span>
                   <span className="text-xs text-gray-500 font-mono">
-                    $
-                    {m.price.toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
+                    ${m.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                 </div>
-                {selectedMarket === m.id && (
-                  <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber-500" />
-                )}
+                {selectedMarket === m.id && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber-500" />}
               </button>
             ))}
           </div>
@@ -462,263 +384,160 @@ export default function PredictionMarketUI() {
 
       {/* Main */}
       <div className="max-w-9xl mx-auto px-6 py-8">
-        {/* Chart + Right Panel */}
         <div className="flex gap-6">
-          {/* Chart container (left) */}
+          {/* LEFT: Betting grid OR Leaderboard chart */}
           <div className="flex-1">
-            <div className="bg-gray-900/30 border border-gray-800/50 rounded-xl overflow-hidden">
-              {/* Header (1 label + 12 columns) */}
-              <div className="grid grid-cols-13 border-b border-gray-800/50 bg-black/20">
-                <div className="col-span-1 p-3 text-xs font-medium text-gray-500 border-r border-gray-800/50">
-                  Round
-                </div>
-                {rounds.map((round, idx) => (
-                  <div
-                    key={round.id}
-                    className={`p-3 text-center text-xs border-r border-gray-800/50 last:border-r-0 relative ${
-                      idx === CURRENT_COL ? "bg-amber-500/5" : ""
-                    }`}
-                  >
-                    <div className="font-mono font-semibold">#{round.id}</div>
-                    {idx === CURRENT_COL && (
-                      <div className="text-amber-400 font-medium mt-1 flex items-center justify-center gap-1 animate-pulse">
-                        <Clock className="w-3 h-3" />
-                        {timeLeft}s
-                      </div>
-                    )}
-                    {idx === CURRENT_COL && (
-                      <div className="absolute inset-x-0 -bottom-px h-0.5 bg-gradient-to-r from-transparent via-amber-500 to-transparent" />
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              {/* Chart/Grid Area */}
-              <div className="relative">
-                {/* Row labels */}
-                <div className="absolute left-0 top-0 bottom-0 w-23 border-r border-gray-800/50 bg-black/20 z-10">
-                  {[
-                    { id: 0, label: "Strong Bull" },
-                    { id: 1, label: "Bull" },
-                    { id: 2, label: "Bear" },
-                    { id: 3, label: "Strong Bear" },
-                  ].map((bucket) => {
-                    const isBull = bucket.label.toLowerCase().includes("bull");
-                    return (
-                      <div
-                        key={bucket.id}
-                        className="h-32 flex items-center px-3 border-b border-gray-800/50 last:border-b-0"
-                      >
-                        <div
-                          className={`font-semibold ${
-                            isBull ? "text-emerald-400" : "text-red-400"
-                          } text-base`}
-                        >
-                          {bucket.label}
+            {viewMode === "betting" ? (
+              <div className="bg-gray-900/30 border border-gray-800/50 rounded-xl overflow-hidden">
+                {/* Header (1 label + 12 columns) */}
+                <div className="grid grid-cols-13 border-b border-gray-800/50 bg-black/20">
+                  <div className="col-span-1 p-3 text-xs font-medium text-gray-500 border-r border-gray-800/50">Round</div>
+                  {rounds.map((round, idx) => (
+                    <div
+                      key={round.id}
+                      className={`p-3 text-center text-xs border-r border-gray-800/50 last:border-r-0 relative ${
+                        idx === CURRENT_COL ? "bg-amber-500/5" : ""
+                      }`}
+                    >
+                      <div className="font-mono font-semibold">#{round.id}</div>
+                      {idx === CURRENT_COL && (
+                        <div className="text-amber-400 font-medium mt-1 flex items-center justify-center gap-1 animate-pulse">
+                          <Clock className="w-3 h-3" /> {timeLeft}s
                         </div>
-                      </div>
-                    );
-                  })}
+                      )}
+                      {idx === CURRENT_COL && (
+                        <div className="absolute inset-x-0 -bottom-px h-0.5 bg-gradient-to-r from-transparent via-amber-500 to-transparent" />
+                      )}
+                    </div>
+                  ))}
                 </div>
 
-                {/* Columns */}
-                <div
-                  className="ml-23 grid grid-cols-12 relative"
-                  style={{ height: "512px" }}
-                >
-                  {rounds.map((round, roundIdx) => {
-                    const isGraphSide = roundIdx < GRAPH_COLS;
-                    const isCurrent = roundIdx === CURRENT_COL;
-                    const isPastOrCurrent = roundIdx <= CURRENT_COL;
+                {/* Chart/Grid Area (your existing betting grid) */}
+                <div className="relative">
+                  <div className="absolute left-0 top-0 bottom-0 w-23 border-r border-gray-800/50 bg-black/20 z-10">
+                    {[
+                      { id: 0, label: "Strong Bull" },
+                      { id: 1, label: "Bull" },
+                      { id: 2, label: "Bear" },
+                      { id: 3, label: "Strong Bear" },
+                    ].map((bucket) => {
+                      const isBull = bucket.label.toLowerCase().includes("bull");
+                      return (
+                        <div key={bucket.id} className="h-32 flex items-center px-3 border-b border-gray-800/50 last:border-b-0">
+                          <div className={`font-semibold ${isBull ? "text-emerald-400" : "text-red-400"} text-base`}>{bucket.label}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
 
-                    return (
-                      <div
-                        key={round.id}
-                        className={`relative group ${
-                          isGraphSide
-                            ? ""
-                            : "border-r border-gray-800/50 last:border-r-0"
-                        }`}
-                      >
-                        {/* GRAPH SIDE (left 6): triangle per revealed round */}
-                        {isGraphSide ? (
-                          <div className="h-full relative">
-                            {round.revealed &&
-                              typeof round.winningBucket === "number" && (
+                  <div className="ml-23 grid grid-cols-12 relative" style={{ height: "512px" }}>
+                    {rounds.map((round, roundIdx) => {
+                      const isGraphSide = roundIdx < GRAPH_COLS;
+                      const isCurrent = roundIdx === CURRENT_COL;
+                      const isPastOrCurrent = roundIdx <= CURRENT_COL;
+
+                      return (
+                        <div key={round.id} className={`relative group ${isGraphSide ? "" : "border-r border-gray-800/50 last:border-r-0"}`}>
+                          {isGraphSide ? (
+                            <div className="h-full relative">
+                              {round.revealed && typeof round.winningBucket === "number" && (
                                 <>
-                                  <div
-                                    className="absolute left-0 right-0 h-px bg-gray-800"
-                                    style={{ top: "50%" }}
-                                  />
-                                  <svg
-                                    className="absolute inset-0 w-full h-full pointer-events-none"
-                                    viewBox="0 0 100 100"
-                                    preserveAspectRatio="none"
-                                  >
+                                  <div className="absolute left-0 right-0 h-px bg-gray-800" style={{ top: "50%" }} />
+                                  <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
                                     <defs>
-                                      <linearGradient
-                                        id={`grad-${round.id}`}
-                                        x1="0%"
-                                        y1="0%"
-                                        x2="0%"
-                                        y2="100%"
-                                      >
-                                        <stop
-                                          offset="0%"
-                                          stopColor={"yellow"}
-                                          stopOpacity="0.15"
-                                        />
-                                        <stop
-                                          offset="100%"
-                                          stopColor={"yellow"}
-                                          stopOpacity="0.05"
-                                        />
+                                      <linearGradient id={`grad-${round.id}`} x1="0%" y1="0%" x2="0%" y2="100%">
+                                        <stop offset="0%" stopColor={"yellow"} stopOpacity="0.15" />
+                                        <stop offset="100%" stopColor={"yellow"} stopOpacity="0.05" />
                                       </linearGradient>
                                     </defs>
-
                                     <polygon
-                                      points={`0,50 50,${bucketCenterY(
-                                        round.winningBucket
-                                      )} 100,50`}
+                                      points={`0,50 50,${bucketCenterY(round.winningBucket)} 100,50`}
                                       fill={`url(#grad-${round.id})`}
                                     />
-
                                     <polygon
-                                      points={`0,50 50,${bucketCenterY(
-                                        round.winningBucket
-                                      )} 100,50`}
-                                      fill="none"
-                                      stroke={"yellow"}
-                                      strokeWidth="1.5"
-                                      vectorEffect="non-scaling-stroke"
-                                      opacity="0.6"
+                                      points={`0,50 50,${bucketCenterY(round.winningBucket)} 100,50`}
+                                      fill="none" stroke={"yellow"} strokeWidth="1.5" vectorEffect="non-scaling-stroke" opacity="0.6"
                                     />
-
                                     {isCurrent && (
-                                      <circle
-                                        cx="100"
-                                        cy="50"
-                                        r="3"
-                                        fill="yellow"
-                                        style={{
-                                          filter:
-                                            "drop-shadow(0 0 4px rgba(255, 255, 0, 0.8))",
-                                        }}
-                                      />
+                                      <circle cx="100" cy="50" r="3" fill="yellow" style={{ filter: "drop-shadow(0 0 4px rgba(255, 255, 0, 0.8))" }} />
                                     )}
                                   </svg>
 
                                   {typeof round.changePct === "number" && (
                                     <div
                                       className="absolute left-0 right-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                                      style={{
-                                        top: `${bucketCenterY(
-                                          round.winningBucket
-                                        )}%`,
-                                        zIndex: 30,
-                                      }}
+                                      style={{ top: `${bucketCenterY(round.winningBucket)}%`, zIndex: 30 }}
                                     >
                                       <div
                                         className={`${
-                                          round.changePct >= 0
-                                            ? "bg-emerald-500/10 border-emerald-500/30"
-                                            : "bg-red-500/10 border-red-500/30"
+                                          round.changePct >= 0 ? "bg-emerald-500/10 border-emerald-500/30" : "bg-red-500/10 border-red-500/30"
                                         } border rounded px-2 py-1 text-xs font-mono backdrop-blur-sm`}
                                       >
-                                        <span
-                                          className={
-                                            round.changePct >= 0
-                                              ? "text-emerald-400"
-                                              : "text-red-400"
-                                          }
-                                        >
+                                        <span className={round.changePct >= 0 ? "text-emerald-400" : "text-red-400"}>
                                           {round.changePct >= 0 ? "+" : ""}
                                           {round.changePct.toFixed(2)}%
                                         </span>
-                                        <span className="text-gray-400 ml-2">
-                                          ${formatUSD(round.price as number)}
-                                        </span>
+                                        <span className="text-gray-400 ml-2">${formatUSD(round.price as number)}</span>
                                       </div>
                                     </div>
                                   )}
                                 </>
                               )}
-                          </div>
-                        ) : (
-                          // GRID SIDE (right 6): current locked; future bettable
-                          <div className="h-full grid grid-rows-4">
-                            {[0, 1, 2, 3].map((bucketId) => {
-                              const cell = round.buckets[bucketId];
-                              const hasBet = cell.userBet != null;
-                              const disabled = isPastOrCurrent; // lock past + current
-                              return (
-                                <button
-                                  key={bucketId}
-                                  onClick={() => handleBet(roundIdx, bucketId)}
-                                  disabled={disabled}
-                                  className={`border-b border-gray-800/50 last:border-b-0 transition p-3 ${
-                                    hasBet
-                                      ? "bg-amber-500/10 border-l-2 border-l-amber-500"
-                                      : "hover:bg-amber-500/10"
-                                  } ${
-                                    disabled
-                                      ? "opacity-50 cursor-not-allowed"
-                                      : ""
-                                  }`}
-                                >
-                                  <div className="text-xs font-mono font-semibold text-gray-400">
-                                    ${formatUSD(Number(cell.bets))}
-                                  </div>
-                                  {hasBet && (
-                                    <div className="text-xs text-amber-400 font-medium mt-1">
-                                      You: ${formatUSD(cell.userBet!)}
-                                    </div>
-                                  )}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        )}
+                            </div>
+                          ) : (
+                            <div className="h-full grid grid-rows-4">
+                              {[0, 1, 2, 3].map((bucketId) => {
+                                const cell = round.buckets[bucketId];
+                                const hasBet = cell.userBet != null;
+                                const disabled = isPastOrCurrent;
+                                return (
+                                  <button
+                                    key={bucketId}
+                                    onClick={() => handleBet(roundIdx, bucketId)}
+                                    disabled={disabled}
+                                    className={`border-b border-gray-800/50 last:border-b-0 transition p-3 ${
+                                      hasBet ? "bg-amber-500/10 border-l-2 border-l-amber-500" : "hover:bg-amber-500/10"
+                                    } ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
+                                  >
+                                    <div className="text-xs font-mono font-semibold text-gray-400">${formatUSD(Number(cell.bets))}</div>
+                                    {hasBet && <div className="text-xs text-amber-400 font-medium mt-1">You: ${formatUSD(cell.userBet!)}</div>}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
 
-                        {/* Current column underline */}
-                        {isCurrent && (
-                          <div className="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 bg-gradient-to-r from-amber-400 via-amber-500 " />
-                        )}
-                        {/* Yellow divider between graph and grid */}
-                        {roundIdx === GRAPH_COLS - 1 && (
-                          <>
-                            <div
-                              className="pointer-events-none absolute right-0 top-0 bottom-0 w-[2px] bg-yellow-400"
-                              style={{
-                                filter:
-                                  "drop-shadow(0 0 6px rgba(255,255,0,0.7))",
-                                zIndex: 50,
-                              }}
-                            />
-                            <div
-                              className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 h-3 w-3 rounded-full bg-yellow-400"
-                              style={{
-                                filter:
-                                  "drop-shadow(0 0 8px rgba(255,255,0,0.9))",
-                                zIndex: 60,
-                              }}
-                            />
-                          </>
-                        )}
-                      </div>
-                    );
-                  })}
+                          {isCurrent && <div className="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 bg-gradient-to-r from-amber-400 via-amber-500 " />}
+                          {roundIdx === GRAPH_COLS - 1 && (
+                            <>
+                              <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-[2px] bg-yellow-400"
+                                style={{ filter: "drop-shadow(0 0 6px rgba(255,255,0,0.7))", zIndex: 50 }} />
+                              <div className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 h-3 w-3 rounded-full bg-yellow-400"
+                                style={{ filter: "drop-shadow(0 0 8px rgba(255,255,0,0.9))", zIndex: 60 }} />
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
-            </div>
+            ) : (
+              <LeaderboardCombinedChart
+                players={leaderboardPlayers}
+                latestProfits={latestLeaderProfits}
+                settleSignal={settleCounter}
+                points={64}
+                ema={0.85}
+                height={420}
+              />
+            )}
           </div>
 
-          {/* RIGHT SIDEBAR: Betting & Stats (Active Bets removed from here) */}
+          {/* RIGHT SIDEBAR: Bet panel (always visible) */}
           <aside className="w-full md:w-80 shrink-0">
             <div className="bg-gray-900/30 border border-gray-800/50 rounded-xl p-4 sticky top-6">
-              <h3 className="text-sm font-semibold text-gray-200 mb-3">
-                Bet Panel
-              </h3>
+              <h3 className="text-sm font-semibold text-gray-200 mb-3">Bet Panel</h3>
 
               {/* Quick amounts */}
               <div>
@@ -729,9 +548,7 @@ export default function PredictionMarketUI() {
                       key={amt}
                       onClick={() => setBetAmount(amt)}
                       className={`px-3 py-1.5 rounded border text-xs font-mono transition ${
-                        betAmount === amt
-                          ? "border-amber-400 text-amber-300 bg-amber-500/10"
-                          : "border-gray-700 hover:border-amber-500/40"
+                        betAmount === amt ? "border-amber-400 text-amber-300 bg-amber-500/10" : "border-gray-700 hover:border-amber-500/40"
                       }`}
                     >
                       ${amt}
@@ -742,67 +559,44 @@ export default function PredictionMarketUI() {
 
               {/* Custom amount */}
               <div className="mt-4">
-                <div className="text-xs text-gray-500 mb-2">
-                  Custom Amount (USD)
-                </div>
+                <div className="text-xs text-gray-500 mb-2">Custom Amount (USD)</div>
                 <div className="flex items-center gap-2">
                   <input
-                    type="number"
-                    min={MIN_BET}
-                    step="0.25"
-                    value={betAmount}
+                    type="number" min={MIN_BET} step="0.25" value={betAmount}
                     onChange={(e) => {
                       const v = parseFloat(e.target.value);
-                      const clamped = Number.isFinite(v)
-                        ? Math.max(MIN_BET, Math.min(v, userBalance))
-                        : MIN_BET;
+                      const clamped = Number.isFinite(v) ? Math.max(MIN_BET, Math.min(v, userBalance)) : MIN_BET;
                       setBetAmount(fromCents(toCents(clamped)));
                     }}
                     className="w-full bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-amber-500/60"
                   />
                   <span className="text-xs text-gray-500">USD</span>
                 </div>
-                <div className="text-[11px] text-gray-500 mt-1">
-                  Click a future cell to place this amount.
-                </div>
+                <div className="text-[11px] text-gray-500 mt-1">Click a future cell to place this amount.</div>
               </div>
 
               {/* Divider */}
               <div className="h-px bg-gray-800/60 my-4" />
 
-              {/* Live / summary stats */}
+              {/* Stats */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-black/20 border border-gray-800 rounded p-3">
                   <div className="text-[11px] text-gray-500 mb-1">Balance</div>
-                  <div className="font-mono font-semibold">
-                    ${formatUSD(userBalance)}
-                  </div>
+                  <div className="font-mono font-semibold">${formatUSD(userBalance)}</div>
                 </div>
                 <div className="bg-black/20 border border-gray-800 rounded p-3">
                   <div className="text-[11px] text-gray-500 mb-1">P/L</div>
-                  <div
-                    className={`font-mono font-semibold ${
-                      pnl >= 0 ? "text-amber-400" : "text-red-400"
-                    }`}
-                  >
+                  <div className={`font-mono font-semibold ${pnl >= 0 ? "text-amber-400" : "text-red-400"}`}>
                     {pnl >= 0 ? "+" : "-"}${formatUSD(Math.abs(pnl))}
                   </div>
                 </div>
                 <div className="bg-black/20 border border-gray-800 rounded p-3">
-                  <div className="text-[11px] text-gray-500 mb-1">
-                    Total Winnings
-                  </div>
-                  <div className="font-mono font-semibold text-emerald-300">
-                    ${formatUSD(totalWinnings)}
-                  </div>
+                  <div className="text-[11px] text-gray-500 mb-1">Total Winnings</div>
+                  <div className="font-mono font-semibold text-emerald-300">${formatUSD(totalWinnings)}</div>
                 </div>
                 <div className="bg-black/20 border border-gray-800 rounded p-3">
-                  <div className="text-[11px] text-gray-500 mb-1">
-                    Total Staked
-                  </div>
-                  <div className="font-mono font-semibold text-gray-300">
-                    ${formatUSD(totalStaked)}
-                  </div>
+                  <div className="text-[11px] text-gray-500 mb-1">Total Staked</div>
+                  <div className="font-mono font-semibold text-gray-300">${formatUSD(totalStaked)}</div>
                 </div>
                 <div className="bg-black/20 border border-gray-800 rounded p-3">
                   <div className="text-[11px] text-gray-500 mb-1">Wins</div>
@@ -810,151 +604,64 @@ export default function PredictionMarketUI() {
                 </div>
                 <div className="bg-black/20 border border-gray-800 rounded p-3">
                   <div className="text-[11px] text-gray-500 mb-1">Win Rate</div>
-                  <div className="font-mono font-semibold">
-                    {completedBets ? `${winRate.toFixed(1)}%` : "—"}
-                  </div>
+                  <div className="font-mono font-semibold">{completedBets ? `${winRate.toFixed(1)}%` : "—"}</div>
                 </div>
               </div>
 
-              {/* Next reveal */}
               <div className="mt-4 text-xs text-gray-400">
-                Next reveal in{" "}
-                <span className="text-amber-400 font-medium">{timeLeft}s</span>
+                Next reveal in <span className="text-amber-400 font-medium">{timeLeft}s</span>
               </div>
             </div>
           </aside>
         </div>
 
-        {/* ===== BELOW EVERYTHING: Active & Past Bets ===== */}
+        {/* ===== BELOW EVERYTHING: Bets table (unchanged) ===== */}
         <div className="mt-8">
-          {/* Combined Bets (Active + Past) */}
           <section className="bg-gray-900/30 border border-gray-800/50 rounded-xl p-4">
             <h3 className="text-sm font-semibold text-gray-200 mb-3">Bets</h3>
-
             {(() => {
               const dash = "—";
-
-              // Build unified rows: Active first (pending), then Past (most recent first)
               const rows = [
-                // Active (pending)
                 ...activeBets.map((b) => ({
-                  key: `active-${b.roundId}`,
-                  roundId: b.roundId,
-                  label: b.label,
-                  you: b.amount,
-                  pool: b.pool,
-                  estOrPayout: b.estPayout,
-                  profit: null,
-                  changePct: null,
-                  price: null,
-                  status: "Pending",
-                  statusClass:
-                    "bg-amber-500/10 text-amber-300 border border-amber-500/30",
+                  key: `active-${b.roundId}`, roundId: b.roundId, label: b.label, you: b.amount, pool: b.pool, estOrPayout: b.estPayout,
+                  profit: null, changePct: null, price: null, status: "Pending",
+                  statusClass: "bg-amber-500/10 text-amber-300 border border-amber-500/30",
                 })),
-                // Past (settled)
                 ...[...betHistory].reverse().map((h) => ({
-                  key: `hist-${h.roundId}-${h.result}`,
-                  roundId: h.roundId,
-                  label: h.label,
-                  you: h.amount,
-                  pool: null,
-                  estOrPayout: h.payout,
-                  profit: h.profit,
-                  changePct: h.changePct,
-                  price: h.price,
-                  status: h.result === "win" ? "Won" : "Lost",
-                  statusClass:
-                    h.result === "win"
-                      ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/30"
-                      : "bg-red-500/10 text-red-300 border border-red-500/30",
+                  key: `hist-${h.roundId}-${h.result}`, roundId: h.roundId, label: h.label, you: h.amount, pool: null, estOrPayout: h.payout,
+                  profit: h.profit, changePct: h.changePct, price: h.price, status: h.result === "win" ? "Won" : "Lost",
+                  statusClass: h.result === "win"
+                    ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/30"
+                    : "bg-red-500/10 text-red-300 border border-red-500/30",
                 })),
               ];
-
-              if (rows.length === 0) {
-                return (
-                  <div className="text-xs text-gray-500">No bets yet.</div>
-                );
-              }
+              if (rows.length === 0) return <div className="text-xs text-gray-500">No bets yet.</div>;
 
               return (
                 <div className="overflow-x-auto">
-                  {/* Internal scroll container */}
                   <div className="max-h-96 overflow-y-auto rounded-md">
                     <table className="min-w-full text-xs">
                       <thead className="text-gray-500 sticky top-0 z-10 bg-black/40 backdrop-blur">
                         <tr className="[&>th]:text-left [&>th]:font-medium [&>th]:px-3 [&>th]:py-2">
-                          <th>Round</th>
-                          <th>Bucket</th>
-                          <th>You</th>
-                          <th>Pool</th>
-                          <th>Est./Payout</th>
-                          <th>Profit</th>
-                          <th>Δ%</th>
-                          <th>Price</th>
-                          <th>Status</th>
+                          <th>Round</th><th>Bucket</th><th>You</th><th>Pool</th><th>Est./Payout</th><th>Profit</th><th>Δ%</th><th>Price</th><th>Status</th>
                         </tr>
                       </thead>
                       <tbody>
                         {rows.map((r) => (
-                          <tr
-                            key={r.key}
-                            className="border-t border-gray-800/60"
-                          >
-                            <td className="px-3 py-2 font-mono text-gray-400">
-                              #{r.roundId}
-                            </td>
+                          <tr key={r.key} className="border-t border-gray-800/60">
+                            <td className="px-3 py-2 font-mono text-gray-400">#{r.roundId}</td>
                             <td className="px-3 py-2">{r.label}</td>
-                            <td className="px-3 py-2 font-mono">
-                              ${formatUSD(r.you)}
+                            <td className="px-3 py-2 font-mono">${formatUSD(r.you)}</td>
+                            <td className="px-3 py-2 font-mono">{r.pool != null ? `$${formatUSD(r.pool)}` : dash}</td>
+                            <td className="px-3 py-2 font-mono">${formatUSD(r.estOrPayout)}</td>
+                            <td className={`px-3 py-2 font-mono ${r.profit == null ? "text-gray-400" : r.profit >= 0 ? "text-amber-300" : "text-red-300"}`}>
+                              {r.profit == null ? dash : `${r.profit >= 0 ? "+" : "-"}$${formatUSD(Math.abs(r.profit))}`}
                             </td>
-                            <td className="px-3 py-2 font-mono">
-                              {r.pool != null ? `$${formatUSD(r.pool)}` : dash}
+                            <td className={`px-3 py-2 font-mono ${r.changePct == null ? "text-gray-400" : r.changePct >= 0 ? "text-emerald-300" : "text-red-300"}`}>
+                              {r.changePct == null ? dash : `${r.changePct >= 0 ? "+" : ""}${r.changePct.toFixed(2)}%`}
                             </td>
-                            <td className="px-3 py-2 font-mono">
-                              ${formatUSD(r.estOrPayout)}
-                            </td>
-                            <td
-                              className={`px-3 py-2 font-mono ${
-                                r.profit == null
-                                  ? "text-gray-400"
-                                  : r.profit >= 0
-                                  ? "text-amber-300"
-                                  : "text-red-300"
-                              }`}
-                            >
-                              {r.profit == null
-                                ? dash
-                                : `${r.profit >= 0 ? "+" : "-"}$${formatUSD(
-                                    Math.abs(r.profit)
-                                  )}`}
-                            </td>
-                            <td
-                              className={`px-3 py-2 font-mono ${
-                                r.changePct == null
-                                  ? "text-gray-400"
-                                  : r.changePct >= 0
-                                  ? "text-emerald-300"
-                                  : "text-red-300"
-                              }`}
-                            >
-                              {r.changePct == null
-                                ? dash
-                                : `${
-                                    r.changePct >= 0 ? "+" : ""
-                                  }${r.changePct.toFixed(2)}%`}
-                            </td>
-                            <td className="px-3 py-2 font-mono">
-                              {r.price == null
-                                ? dash
-                                : `$${formatUSD(r.price)}`}
-                            </td>
-                            <td className="px-3 py-2">
-                              <span
-                                className={`px-2 py-0.5 rounded ${r.statusClass}`}
-                              >
-                                {r.status}
-                              </span>
-                            </td>
+                            <td className="px-3 py-2 font-mono">{r.price == null ? dash : `$${formatUSD(r.price)}`}</td>
+                            <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded ${r.statusClass}`}>{r.status}</span></td>
                           </tr>
                         ))}
                       </tbody>
