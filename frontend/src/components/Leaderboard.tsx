@@ -2,25 +2,32 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-export type LBPlayer = { id: string; name: string; color: string; width?: number; z?: number };
+export type LBPlayer = {
+  id: string;
+  name: string;
+  color: string;
+  width?: number;
+  z?: number;
+};
 
 type Props = {
   players: LBPlayer[];
   latestProfits: Record<string, number>;
-  settleSignal: number;          // increment on each 5s settle
-  roundProgress?: number;        // 0..1 from parent timer (syncs progress bar)
+  settleSignal: number; // increment on each 5s settle
+  roundProgress?: number; // 0..1 from parent timer (syncs progress bar)
   points?: number;
-  ema?: number;                  // only for non-step ids
+  ema?: number; // only for non-step ids
   height?: number | string;
   interactive?: boolean;
-  stepIds?: string[];            // step (no EMA, no tween) lines -> defaults ["you"]
-  tweenOthers?: boolean;         // tween only non-step lines
-  tweenMs?: number;              // tween duration for non-step lines
-  persistKey?: string;           // localStorage key for series/window
+  stepIds?: string[]; // step (no EMA, no tween) lines -> defaults ["you"]
+  tweenOthers?: boolean; // tween only non-step lines
+  tweenMs?: number; // tween duration for non-step lines
+  persistKey?: string; // localStorage key for series/window
 };
 
 /* ---------- Utils ---------- */
-const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
+const clamp = (n: number, lo: number, hi: number) =>
+  Math.max(lo, Math.min(hi, n));
 
 function niceTicks(min: number, max: number, count = 5) {
   if (!isFinite(min) || !isFinite(max)) return [0, 1];
@@ -29,7 +36,8 @@ function niceTicks(min: number, max: number, count = 5) {
   const step0 = span / Math.max(1, count);
   const mag = Math.pow(10, Math.floor(Math.log10(step0)));
   const err = step0 / mag;
-  const step = err >= 7 ? 10 * mag : err >= 3 ? 5 * mag : err >= 1.5 ? 2 * mag : mag;
+  const step =
+    err >= 7 ? 10 * mag : err >= 3 ? 5 * mag : err >= 1.5 ? 2 * mag : mag;
   const niceMin = Math.floor(min / step) * step;
   const niceMax = Math.ceil(max / step) * step;
   const ticks: number[] = [];
@@ -55,12 +63,17 @@ function toSmoothPath(points: Array<{ x: number; y: number }>, tension = 0.55) {
   return path.join(" ");
 }
 
-function toPointsString(arr: number[], fn: (v: number, i: number, n: number) => { x: number; y: number }) {
+function toPointsString(
+  arr: number[],
+  fn: (v: number, i: number, n: number) => { x: number; y: number }
+) {
   const n = arr.length || 1;
-  return arr.map((v, i) => {
-    const { x, y } = fn(v, i, n);
-    return `${x},${y}`;
-  }).join(" ");
+  return arr
+    .map((v, i) => {
+      const { x, y } = fn(v, i, n);
+      return `${x},${y}`;
+    })
+    .join(" ");
 }
 
 function lerpSeries(a: number[], b: number[], t: number) {
@@ -105,12 +118,17 @@ export default function LeaderboardCombinedChart({
     try {
       const raw = localStorage.getItem(persistKey);
       if (!raw) return;
-      const parsed = JSON.parse(raw) as { points: number; data: Record<string, number[]> };
+      const parsed = JSON.parse(raw) as {
+        points: number;
+        data: Record<string, number[]>;
+      };
       const stored = parsed?.data ?? {};
       // normalize to current players & points
       const next: Record<string, number[]> = {};
       players.forEach((p) => {
-        const arr = stored[p.id] ?? Array.from({ length: points }, () => latestProfits[p.id] ?? 0);
+        const arr =
+          stored[p.id] ??
+          Array.from({ length: points }, () => latestProfits[p.id] ?? 0);
         const trimmed = arr.slice(-points);
         while (trimmed.length < points) trimmed.unshift(trimmed[0] ?? 0);
         next[p.id] = trimmed;
@@ -148,15 +166,22 @@ export default function LeaderboardCombinedChart({
   useEffect(() => {
     if (!persistKey) return;
     try {
-      localStorage.setItem(persistKey, JSON.stringify({ points, data: series }));
-    } catch {/* ignore quota */}
+      localStorage.setItem(
+        persistKey,
+        JSON.stringify({ points, data: series })
+      );
+    } catch {
+      /* ignore quota */
+    }
   }, [series, persistKey, points]);
 
   // EMA state for non-step ids
   const emaRef = useRef<Record<string, number>>({});
   useEffect(() => {
     const init: Record<string, number> = {};
-    players.forEach((p) => (init[p.id] = series[p.id]?.[series[p.id].length - 1] ?? 0));
+    players.forEach(
+      (p) => (init[p.id] = series[p.id]?.[series[p.id].length - 1] ?? 0)
+    );
     emaRef.current = init;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // mount
@@ -177,7 +202,9 @@ export default function LeaderboardCombinedChart({
       const arr = series[pid] ?? Array.from({ length: points }, () => 0);
       const prevSmooth = emaRef.current[pid] ?? arr[arr.length - 1] ?? 0;
       const raw = latestProfits[pid] ?? prevSmooth;
-      const nextVal = stepSet.has(pid) ? raw : ema * prevSmooth + (1 - ema) * raw;
+      const nextVal = stepSet.has(pid)
+        ? raw
+        : ema * prevSmooth + (1 - ema) * raw;
       if (!stepSet.has(pid)) emaRef.current[pid] = nextVal;
 
       const tail = arr.slice(1);
@@ -210,7 +237,9 @@ export default function LeaderboardCombinedChart({
         for (const pid of Object.keys(toRef.current)) {
           blended[pid] = stepSet.has(pid)
             ? toRef.current[pid] // snap
-            : (D ? lerpSeries(fromRef.current[pid], toRef.current[pid], eased) : toRef.current[pid]);
+            : D
+            ? lerpSeries(fromRef.current[pid], toRef.current[pid], eased)
+            : toRef.current[pid];
         }
         setSeries(blended);
         rafRef.current = requestAnimationFrame(loop);
@@ -228,14 +257,31 @@ export default function LeaderboardCombinedChart({
       lastTsRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settleSignal, players, latestProfits, ema, points, tweenOthers, tweenMs, stepIds.join("|")]);
+  }, [
+    settleSignal,
+    players,
+    latestProfits,
+    ema,
+    points,
+    tweenOthers,
+    tweenMs,
+    stepIds.join("|"),
+  ]);
 
   // y-domain & standings
   const { minY, maxY, latest } = useMemo(() => {
     let minV = Number.POSITIVE_INFINITY;
     let maxV = Number.NEGATIVE_INFINITY;
-    Object.values(series).forEach((arr) => { for (const v of arr) { if (v < minV) minV = v; if (v > maxV) maxV = v; } });
-    if (!isFinite(minV) || !isFinite(maxV)) { minV = 0; maxV = 1; }
+    Object.values(series).forEach((arr) => {
+      for (const v of arr) {
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+      }
+    });
+    if (!isFinite(minV) || !isFinite(maxV)) {
+      minV = 0;
+      maxV = 1;
+    }
     const pad = (maxV - minV) * 0.12 + 0.6;
     const lo = minV - pad;
     const hi = Math.max(lo + 1, maxV + pad);
@@ -247,7 +293,8 @@ export default function LeaderboardCombinedChart({
     return { minY: lo, maxY: hi, latest };
   }, [series, players]);
 
-  const valueToY = (val: number) => clamp(100 - ((val - minY) / (maxY - minY || 1)) * 100, 0, 100);
+  const valueToY = (val: number) =>
+    clamp(100 - ((val - minY) / (maxY - minY || 1)) * 100, 0, 100);
 
   // paths: stepIds -> polyline (keeps flats flat); others -> smooth Bézier
   const { polylines, smoothPaths, seriesLen } = useMemo(() => {
@@ -258,7 +305,10 @@ export default function LeaderboardCombinedChart({
     const stepSet = new Set(stepIds);
     for (const p of players) {
       const arr = series[p.id] ?? [];
-      const ptsFn = (v: number, i: number, n: number) => ({ x: (i / (n - 1)) * 100, y: valueToY(v) });
+      const ptsFn = (v: number, i: number, n: number) => ({
+        x: (i / (n - 1)) * 100,
+        y: valueToY(v),
+      });
       if (stepSet.has(p.id)) {
         poly[p.id] = toPointsString(arr, ptsFn);
       } else {
@@ -283,7 +333,10 @@ export default function LeaderboardCombinedChart({
 
   const hoverRows = useMemo(() => {
     if (hoverIdx == null) return null;
-    const rows = players.map((p) => ({ ...p, val: series[p.id]?.[hoverIdx] ?? 0 }));
+    const rows = players.map((p) => ({
+      ...p,
+      val: series[p.id]?.[hoverIdx] ?? 0,
+    }));
     rows.sort((a, b) => b.val - a.val);
     return rows;
   }, [hoverIdx, series, players]);
@@ -295,17 +348,11 @@ export default function LeaderboardCombinedChart({
       {/* synced progress (optional) */}
       {typeof roundProgress === "number" && (
         <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800/60 bg-black/30">
-          <div className="text-xs text-gray-400 font-semibold">Max Profit Leaderboard</div>
-          <div className="flex items-center gap-2 text-[11px] text-gray-400 font-mono">
-            <span>Next settle</span>
-            <div className="w-24 h-1.5 bg-gray-800/60 rounded">
-              <div className="h-full bg-amber-500 rounded transition-[width]" style={{ width: `${clamp(roundProgress, 0, 1) * 100}%` }} />
-            </div>
-            <span>{((1 - clamp(roundProgress, 0, 1)) * 5).toFixed(1)}s</span>
+          <div className="text-xs text-gray-400 font-semibold">
+            Leaderboard
           </div>
         </div>
       )}
-
       <div
         ref={chartRef}
         onMouseMove={onMove}
@@ -313,10 +360,24 @@ export default function LeaderboardCombinedChart({
         className="relative"
         style={{ height: typeof height === "number" ? `${height}px` : height }}
       >
-        <svg className="absolute inset-0 w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Leaderboard PnL chart">
+        <svg
+          className="absolute inset-0 w-full h-full"
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          role="img"
+          aria-label="Leaderboard PnL chart"
+        >
           <defs>
             {players.map((p) => (
-              <linearGradient key={p.id} id={`grad-${p.id}`} x1="0" x2="100" y1="0" y2="0" gradientUnits="userSpaceOnUse">
+              <linearGradient
+                key={p.id}
+                id={`grad-${p.id}`}
+                x1="0"
+                x2="100"
+                y1="0"
+                y2="0"
+                gradientUnits="userSpaceOnUse"
+              >
                 <stop offset="0%" stopColor={p.color} stopOpacity="0.25" />
                 <stop offset="70%" stopColor={p.color} stopOpacity="0.9" />
                 <stop offset="100%" stopColor={p.color} stopOpacity="1" />
@@ -324,24 +385,49 @@ export default function LeaderboardCombinedChart({
             ))}
             <filter id="glow-you">
               <feGaussianBlur stdDeviation="1.2" result="blur" />
-              <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
             </filter>
           </defs>
 
           {/* grid */}
           {ticks.map((t, i, arr) => {
-            const y = clamp(100 - ((t - minY) / (maxY - minY || 1)) * 100, 0, 100);
+            const y = clamp(
+              100 - ((t - minY) / (maxY - minY || 1)) * 100,
+              0,
+              100
+            );
             const edge = i === 0 || i === arr.length - 1;
             return (
               <g key={i}>
-                <line x1="0" x2="100" y1={y} y2={y} stroke={edge ? "#1f2937" : "#111827"} strokeWidth="0.5" />
-                <text x="0.8" y={y - 1} fontSize="2.6" fill="#9CA3AF">{t.toFixed(0)}</text>
+                <line
+                  x1="0"
+                  x2="100"
+                  y1={y}
+                  y2={y}
+                  stroke={edge ? "#1f2937" : "#111827"}
+                  strokeWidth="0.5"
+                />
+                <text x="0.8" y={y - 1} fontSize="2.6" fill="#9CA3AF">
+                  {t.toFixed(0)}
+                </text>
               </g>
             );
           })}
 
           {/* NOW divider at right */}
-          <line x1="100" x2="100" y1="0" y2="100" stroke="#9CA3AF" strokeWidth="0.6" strokeDasharray="1.4 1.4" opacity="0.7" />
+          <line
+            x1="100"
+            x2="100"
+            y1="0"
+            y2="100"
+            stroke="#9CA3AF"
+            strokeWidth="0.6"
+            strokeDasharray="1.4 1.4"
+            opacity="0.7"
+          />
 
           {/* lines: polylines for stepIds (flat segments), smooth paths for others */}
           {players
@@ -384,7 +470,15 @@ export default function LeaderboardCombinedChart({
             return (
               <g key={`${p.id}-dot`}>
                 <circle cx="100" cy={y} r={isYou ? 2.3 : 1.8} fill={p.color} />
-                <text x="98" y={y - 2.5} textAnchor="end" fontSize="3" fill={p.color}>{p.name}</text>
+                <text
+                  x="98"
+                  y={y - 2.5}
+                  textAnchor="end"
+                  fontSize="3"
+                  fill={p.color}
+                >
+                  {p.name}
+                </text>
               </g>
             );
           })}
@@ -394,8 +488,12 @@ export default function LeaderboardCombinedChart({
             <line
               x1={(hoverIdx / (seriesLen - 1)) * 100}
               x2={(hoverIdx / (seriesLen - 1)) * 100}
-              y1="0" y2="100"
-              stroke="#F59E0B" strokeOpacity="0.35" strokeWidth="0.5" strokeDasharray="1.2 1.2"
+              y1="0"
+              y2="100"
+              stroke="#F59E0B"
+              strokeOpacity="0.35"
+              strokeWidth="0.5"
+              strokeDasharray="1.2 1.2"
             />
           )}
         </svg>
@@ -408,29 +506,53 @@ export default function LeaderboardCombinedChart({
             </div>
             <div className="space-y-1">
               {hoverRows.map((r) => (
-                <div key={r.id} className="flex items-center justify-between gap-4">
+                <div
+                  key={r.id}
+                  className="flex items-center justify-between gap-4"
+                >
                   <div className="flex items-center gap-2 text-xs">
-                    <span className="inline-block h-2 w-2 rounded-full ring-1 ring-black/20" style={{ background: r.color }} />
-                    <span className={r.id === "you" ? "text-amber-300" : "text-gray-200"}>{r.name}</span>
+                    <span
+                      className="inline-block h-2 w-2 rounded-full ring-1 ring-black/20"
+                      style={{ background: r.color }}
+                    />
+                    <span
+                      className={
+                        r.id === "you" ? "text-amber-300" : "text-gray-200"
+                      }
+                    >
+                      {r.name}
+                    </span>
                   </div>
-                  <span className="font-mono text-xs text-gray-300">{r.val.toFixed(2)}</span>
+                  <span className="font-mono text-xs text-gray-300">
+                    {r.val.toFixed(2)}
+                  </span>
                 </div>
               ))}
             </div>
           </div>
         )}
       </div>
-
       {/* mini standings */}
       <div className="px-3 py-2 border-t border-gray-800/60 bg-black/20">
         <div className="flex flex-wrap gap-3 text-xs">
           {latest.map((l, i) => (
             <div key={l.id} className="flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full ring-1 ring-black/20" style={{ background: l.color }} />
-              <span className={l.id === "you" ? "text-amber-300 font-medium" : "text-gray-300"}>
+              <span
+                className="h-2.5 w-2.5 rounded-full ring-1 ring-black/20"
+                style={{ background: l.color }}
+              />
+              <span
+                className={
+                  l.id === "you"
+                    ? "text-amber-300 font-medium"
+                    : "text-gray-300"
+                }
+              >
                 {i + 1}. {l.name}
               </span>
-              <span className="font-mono text-gray-400">{l.val.toFixed(2)}</span>
+              <span className="font-mono text-gray-400">
+                {l.val.toFixed(2)}
+              </span>
             </div>
           ))}
         </div>
