@@ -29,25 +29,25 @@ function newRound(id) {
     buckets: [
       {
         id: 0,
-        label: "Strong Up",
+        label: "Strong Bull",
         bets: Math.floor(Math.random() * 500) + 100,
         userBet: null,
       },
       {
         id: 1,
-        label: "Up",
+        label: "Bull",
         bets: Math.floor(Math.random() * 400) + 100,
         userBet: null,
       },
       {
         id: 2,
-        label: "Down",
+        label: "Bear",
         bets: Math.floor(Math.random() * 400) + 100,
         userBet: null,
       },
       {
         id: 3,
-        label: "Strong Down",
+        label: "Strong Bear",
         bets: Math.floor(Math.random() * 500) + 100,
         userBet: null,
       },
@@ -401,21 +401,27 @@ export default function PredictionMarketUI() {
             {/* Row labels */}
             <div className="absolute left-0 top-0 bottom-0 w-23 border-r border-gray-800/50 bg-black/20 z-10">
               {[
-                { id: 0, label: "Strong Up", threshold: "> +0.5%" },
-                { id: 1, label: "Up", threshold: "+0.1 to +0.5%" },
-                { id: 2, label: "Down", threshold: "-0.5 to -0.1%" },
-                { id: 3, label: "Strong Down", threshold: "< -0.5%" },
-              ].map((bucket) => (
-                <div
-                  key={bucket.id}
-                  className="h-32 flex flex-col justify-center px-3 border-b border-gray-800/50 last:border-b-0"
-                >
-                  <div className="text-xs font-medium">{bucket.label}</div>
-                  <div className="text-xs text-gray-500">
-                    {bucket.threshold}
+                { id: 0, label: "Strong Bull" },
+                { id: 1, label: "Bull" },
+                { id: 2, label: "Bear" },
+                { id: 3, label: "Strong Bear" },
+              ].map((bucket) => {
+                const isBull = bucket.label.toLowerCase().includes("bull");
+                return (
+                  <div
+                    key={bucket.id}
+                    className="h-32 flex items-center px-3 border-b border-gray-800/50 last:border-b-0"
+                  >
+                    <div
+                      className={`font-semibold ${
+                        isBull ? "text-emerald-400" : "text-red-400"
+                      } text-base`}
+                    >
+                      {bucket.label}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* Columns */}
@@ -431,7 +437,11 @@ export default function PredictionMarketUI() {
                 return (
                   <div
                     key={round.id}
-                    className="border-r border-gray-800/50 last:border-r-0 relative group"
+                    className={`relative group ${
+                      isGraphSide
+                        ? ""
+                        : "border-r border-gray-800/50 last:border-r-0"
+                    }`}
                   >
                     {/* GRAPH SIDE (left 6): triangle per revealed round */}
                     {/* GRAPH SIDE (left 6): triangle per revealed round */}
@@ -463,8 +473,8 @@ export default function PredictionMarketUI() {
                                       offset="0%"
                                       stopColor={
                                         round.winningBucket <= 1
-                                          ? "#10b981"
-                                          : "#ef4444"
+                                          ? "yellow"
+                                          : "yellow"
                                       }
                                       stopOpacity="0.15"
                                     />
@@ -472,8 +482,8 @@ export default function PredictionMarketUI() {
                                       offset="100%"
                                       stopColor={
                                         round.winningBucket <= 1
-                                          ? "#10b981"
-                                          : "#ef4444"
+                                          ? "yellow"
+                                          : "yellow"
                                       }
                                       stopOpacity="0.05"
                                     />
@@ -494,8 +504,8 @@ export default function PredictionMarketUI() {
                                   fill="none"
                                   stroke={
                                     round.winningBucket <= 1
-                                      ? "#10b981"
-                                      : "#ef4444"
+                                      ? "yellow"
+                                      : "yellow"
                                   }
                                   strokeWidth="1.5"
                                   vectorEffect="non-scaling-stroke"
@@ -509,8 +519,21 @@ export default function PredictionMarketUI() {
                                 cx="50" 
                                 cy={bucketCenterY(round.winningBucket)} 
                                 r="3.5" 
-                                fill={round.winningBucket <= 1 ? '#10b981' : '#ef4444'}
+                                fill={round.winningBucket <= 1 ? 'yellow' : 'yellow'}
                               /> */}
+
+                                {isCurrent && (
+                                  <circle
+                                    cx="100"
+                                    cy="50"
+                                    r="3"
+                                    fill="yellow"
+                                    style={{
+                                      filter:
+                                        "drop-shadow(0 0 4px rgba(255, 255, 0, 0.8))",
+                                    }}
+                                  />
+                                )}
                               </svg>
 
                               {typeof round.changePct === "number" && (
@@ -585,7 +608,29 @@ export default function PredictionMarketUI() {
 
                     {/* Current column underline */}
                     {isCurrent && (
-                      <div className="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 bg-gradient-to-r from-transparent via-amber-500 to-transparent" />
+                      <div className="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 bg-gradient-to-r from-amber-400 via-amber-500 " />
+                    )}
+                    {/* Yellow divider line + center dot between graph and grid */}
+                    {roundIdx === GRAPH_COLS - 1 && (
+                      <>
+                        {/* vertical divider */}
+                        <div
+                          className="pointer-events-none absolute right-0 top-0 bottom-0 w-[2px] bg-yellow-400"
+                          style={{
+                            filter: "drop-shadow(0 0 6px rgba(255,255,0,0.7))",
+                            zIndex: 50,
+                          }}
+                        />
+
+                        {/* center dot on the divider */}
+                        <div
+                          className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 h-3 w-3 rounded-full bg-yellow-400"
+                          style={{
+                            filter: "drop-shadow(0 0 8px rgba(255,255,0,0.9))",
+                            zIndex: 60,
+                          }}
+                        />
+                      </>
                     )}
                   </div>
                 );
