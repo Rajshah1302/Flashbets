@@ -1,10 +1,11 @@
 "use client";
 
 import React, { useEffect, useRef, useState, useMemo } from "react";
-import { Clock } from "lucide-react";
+import { Clock, Wallet, Zap } from "lucide-react";
 import LeaderboardCombinedChart, { LBPlayer } from "@/components/Leaderboard";
 import NavBar from "@/components/Navbar";
 import BetsTable from "@/components/HistoryTable";
+import { useYellowSDK } from "@/lib/useYellowSDK";
 
 /* ===== constants ===== */
 const VISIBLE_ROUNDS = 12;
@@ -42,25 +43,25 @@ function newRound(id: number) {
       {
         id: 0,
         label: "Strong Bull",
-        bets: Math.floor(Math.random() * 500) + 100,
+        bets: Math.floor(Math.random() * 50) + 10,
         userBet: null as number | null,
       },
       {
         id: 1,
         label: "Bull",
-        bets: Math.floor(Math.random() * 400) + 100,
+        bets: Math.floor(Math.random() * 40) + 10,
         userBet: null as number | null,
       },
       {
         id: 2,
         label: "Bear",
-        bets: Math.floor(Math.random() * 400) + 100,
+        bets: Math.floor(Math.random() * 40) + 10,
         userBet: null as number | null,
       },
       {
         id: 3,
         label: "Strong Bear",
-        bets: Math.floor(Math.random() * 500) + 100,
+        bets: Math.floor(Math.random() * 50) + 10,
         userBet: null as number | null,
       },
     ],
@@ -129,11 +130,38 @@ export default function PredictionMarketUI() {
   const [selectedMarket, setSelectedMarket] = useState(0);
   const initialPrice = markets.find((m) => m.id === selectedMarket)?.price ?? 0;
 
+  // Yellow SDK integration
+  const {
+    isConnected: isYellowConnected,
+    isConnecting: isYellowConnecting,
+    userAddress: yellowUserAddress,
+    balance: yellowBalance,
+    isLoading: isYellowLoading,
+    error: yellowError,
+    connectWallet,
+    connectToClearnode,
+    disconnect,
+    requestTestTokens,
+    executeFlashTrade,
+    withdrawProfit,
+    settleSession,
+    refreshBalance,
+    clearError,
+  } = useYellowSDK();
+
+  // Use Yellow Network balance if connected, otherwise use mock balance
   const [userBalance, setUserBalance] = useState(125.5);
   const userBalanceRef = useRef(userBalance);
   useEffect(() => {
     userBalanceRef.current = userBalance;
   }, [userBalance]);
+
+  // Update balance when Yellow Network balance changes
+  useEffect(() => {
+    if (isYellowConnected && yellowBalance > 0) {
+      setUserBalance(yellowBalance);
+    }
+  }, [isYellowConnected, yellowBalance]);
 
   const initialBalanceRef = useRef(125.5);
 
@@ -367,7 +395,7 @@ export default function PredictionMarketUI() {
   }, [selectedMarket]);
 
   // place bet
-  const handleBet = (roundIndex: number, bucketId: number) => {
+  const handleBet = async (roundIndex: number, bucketId: number) => {
     const r = rounds[roundIndex];
     if (!r || r.revealed) return;
     if (roundIndex <= CURRENT_COL) return;
@@ -388,8 +416,45 @@ export default function PredictionMarketUI() {
     const amt = fromCents(toCents(clamped));
     if (amt <= 0) return;
 
-    // deduct from liquid balance (wallet), but PnL adds pending stake back until resolved
-    setUserBalance((prev) => fromCents(toCents(prev) - toCents(amt)));
+    // If connected to Yellow Network, execute the bet through Yellow SDK
+    if (isYellowConnected) {
+      try {
+        const currentPrice = markets[selectedMarket]?.price || initialPrice;
+        const direction = bucketId <= 1 ? 'up' : 'down'; // 0,1 = up, 2,3 = down
+        
+        const tradeResult = await executeFlashTrade({
+          fromAsset: 'YELLOW_TEST_USD',
+          toAsset: 'YELLOW_TEST_USD',
+          amount: amt,
+          price: currentPrice,
+          direction,
+          expiryTime: Math.floor(Date.now() / 1000) + (REVEAL_EVERY_SECONDS * 12), // 12 rounds ahead
+        });
+
+        if (!tradeResult.success) {
+          setToast({
+            type: "info",
+            message: tradeResult.error || "Failed to place bet",
+          });
+          return;
+        }
+
+        // Update balance from Yellow Network
+        if (tradeResult.balance) {
+          setUserBalance(tradeResult.balance.unified);
+        }
+      } catch (error) {
+        setToast({
+          type: "info",
+          message: "Failed to execute bet through Yellow Network",
+        });
+        return;
+      }
+    } else {
+      // Fallback to local balance management
+      setUserBalance((prev) => fromCents(toCents(prev) - toCents(amt)));
+    }
+
     setTotalStaked((ts) => ts + amt);
 
     setRounds((prev) => {
@@ -402,6 +467,11 @@ export default function PredictionMarketUI() {
       );
       updated[roundIndex] = { ...round, buckets };
       return updated;
+    });
+
+    setToast({
+      type: "info",
+      message: isYellowConnected ? "Bet placed via Yellow Network (zero gas fees!)" : "Bet placed locally",
     });
   };
 
@@ -446,12 +516,12 @@ export default function PredictionMarketUI() {
       <NavBar />
 
       {/* Timer progress */}
-      <div className="h-1.5 bg-gray-800/60">
+      {/* <div className="h-1.5 bg-gray-800/60">
         <div
           className="h-full bg-amber-500 transition-all duration-1000"
           style={{ width: `${timerPct}%` }}
         />
-      </div>
+      </div> */}
 
       {/* Market Selector + Toggle */}
       <div className="border-b border-gray-800/50 bg-gray-900/20">
@@ -757,6 +827,7 @@ export default function PredictionMarketUI() {
                 persistKey={`lb-pnl-${selectedMarket}`}
               />
             </div>
+
           </div>
 
           {/* RIGHT: Stats / Bet controls */}
@@ -765,6 +836,133 @@ export default function PredictionMarketUI() {
               <h3 className="text-sm font-semibold text-gray-200 mb-3">
                 Bet Panel
               </h3>
+
+              {/* Yellow Network Connection */}
+              <div className="mb-6 p-4 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                <div className="flex items-center gap-2 mb-3">
+                  <Zap className="h-4 w-4 text-yellow-500" />
+                  <span className="text-sm font-medium text-gray-200">Yellow Network</span>
+                  <div className={`w-2 h-2 rounded-full ${isYellowConnected ? 'bg-green-500' : 'bg-gray-500'}`}></div>
+                </div>
+                
+                {!isYellowConnected ? (
+                  <div>
+                    <p className="text-xs text-gray-400 mb-3">
+                      Connect to Yellow Network for zero gas fee betting
+                    </p>
+                    <button
+                      onClick={async () => {
+                        const walletConnected = await connectWallet();
+                        if (walletConnected) {
+                          await connectToClearnode();
+                        }
+                      }}
+                      disabled={isYellowConnecting}
+                      className="w-full bg-yellow-500 hover:bg-yellow-600 text-black px-3 py-2 rounded text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      {isYellowConnecting ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin"></div>
+                          Connecting...
+                        </>
+                      ) : (
+                        <>
+                          <Wallet className="h-4 w-4" />
+                          Connect to Yellow Network
+                        </>
+                      )}
+                    </button>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-gray-400">Connected</span>
+                      <button
+                        onClick={disconnect}
+                        className="text-xs text-red-400 hover:text-red-300"
+                      >
+                        Disconnect
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-400 mb-2">
+                      {yellowUserAddress ? `${yellowUserAddress.slice(0, 6)}...${yellowUserAddress.slice(-4)}` : 'Connected'}
+                    </p>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-400">Balance:</span>
+                      <span className="text-sm font-medium text-yellow-400">
+                        {yellowBalance.toFixed(2)} YELLOW_TEST_USD
+                      </span>
+                    </div>
+                    
+                    {/* Profit/Loss Display */}
+                    <div className="flex items-center justify-between mt-2">
+                      <span className="text-xs text-gray-400">Profit/Loss:</span>
+                      <span className={`text-sm font-medium ${
+                        pnlDisplay >= 0 ? 'text-green-400' : 'text-red-400'
+                      }`}>
+                        {pnlDisplay >= 0 ? '+' : ''}${formatUSD(pnlDisplay)}
+                      </span>
+                    </div>
+                    {yellowBalance === 0 && (
+                      <button
+                        onClick={() => requestTestTokens(10)}
+                        disabled={isYellowLoading}
+                        className="w-full mt-2 bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-xs disabled:opacity-50"
+                      >
+                        {isYellowLoading ? 'Requesting...' : 'Request Test Tokens'}
+                      </button>
+                    )}
+                    
+                    {yellowBalance > 0 && (
+                      <div className="mt-3 space-y-2">
+                        <button
+                          onClick={async () => {
+                            const result = await withdrawProfit(yellowBalance * 0.5); // Withdraw 50%
+                            if (result.success) {
+                              setToast({
+                                type: "info",
+                                message: `Withdrawn ${(yellowBalance * 0.5).toFixed(2)} YELLOW_TEST_USD`,
+                              });
+                            }
+                          }}
+                          disabled={isYellowLoading}
+                          className="w-full bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded text-xs disabled:opacity-50"
+                        >
+                          {isYellowLoading ? 'Withdrawing...' : 'Withdraw 50%'}
+                        </button>
+                        
+                        <button
+                          onClick={async () => {
+                            const result = await settleSession();
+                            if (result.success) {
+                              setToast({
+                                type: "info",
+                                message: "Session settled! All profits withdrawn to your wallet.",
+                              });
+                            }
+                          }}
+                          disabled={isYellowLoading}
+                          className="w-full bg-purple-500 hover:bg-purple-600 text-white px-3 py-1 rounded text-xs disabled:opacity-50"
+                        >
+                          {isYellowLoading ? 'Settling...' : 'Settle Session'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                
+                {yellowError && (
+                  <div className="mt-2 p-2 bg-red-900/30 border border-red-700/50 rounded text-xs text-red-300">
+                    {yellowError}
+                    <button
+                      onClick={clearError}
+                      className="ml-2 text-red-400 hover:text-red-300"
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
+              </div>
 
               {/* Quick amounts */}
               <div>
@@ -819,10 +1017,18 @@ export default function PredictionMarketUI() {
               {/* Stats */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-black/20 border border-gray-800 rounded p-3">
-                  <div className="text-[11px] text-gray-500 mb-1">Balance</div>
+                  <div className="text-[11px] text-gray-500 mb-1">
+                    {isYellowConnected ? 'Yellow Balance' : 'Balance'}
+                  </div>
                   <div className="font-mono font-semibold">
                     ${formatUSD(userBalance)}
                   </div>
+                  {isYellowConnected && (
+                    <div className="text-[10px] text-yellow-400 flex items-center gap-1 mt-1">
+                      <Zap className="h-3 w-3" />
+                      Zero gas fees
+                    </div>
+                  )}
                 </div>
                 <div className="bg-black/20 border border-gray-800 rounded p-3">
                   <div className="text-[11px] text-gray-500 mb-1">P/L</div>
