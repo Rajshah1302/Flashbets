@@ -5,7 +5,7 @@ import { Clock, Wallet, Zap } from "lucide-react";
 import LeaderboardCombinedChart, { LBPlayer } from "@/components/Leaderboard";
 import NavBar from "@/components/Navbar";
 import BetsTable from "@/components/HistoryTable";
-import { useYellowSDK } from "@/lib/useYellowSDK";
+import { useYellowSDKWagmi } from "@/lib/useYellowSDKWagmi";
 
 /* ===== constants ===== */
 const VISIBLE_ROUNDS = 12;
@@ -130,7 +130,7 @@ export default function PredictionMarketUI() {
   const [selectedMarket, setSelectedMarket] = useState(0);
   const initialPrice = markets.find((m) => m.id === selectedMarket)?.price ?? 0;
 
-  // Yellow SDK integration
+  // Yellow SDK integration with wagmi
   const {
     isConnected: isYellowConnected,
     isConnecting: isYellowConnecting,
@@ -147,10 +147,10 @@ export default function PredictionMarketUI() {
     settleSession,
     refreshBalance,
     clearError,
-  } = useYellowSDK();
+  } = useYellowSDKWagmi();
 
-  // Use Yellow Network balance if connected, otherwise use mock balance
-  const [userBalance, setUserBalance] = useState(125.5);
+  // Use Yellow Network balance if connected, otherwise use local balance
+  const [userBalance, setUserBalance] = useState(0); // Start with 0 balance
   const userBalanceRef = useRef(userBalance);
   useEffect(() => {
     userBalanceRef.current = userBalance;
@@ -158,12 +158,15 @@ export default function PredictionMarketUI() {
 
   // Update balance when Yellow Network balance changes
   useEffect(() => {
-    if (isYellowConnected && yellowBalance > 0) {
+    if (isYellowConnected) {
       setUserBalance(yellowBalance);
+    } else {
+      // If not connected to Yellow Network, use a small local balance for demo
+      setUserBalance(10);
     }
   }, [isYellowConnected, yellowBalance]);
 
-  const initialBalanceRef = useRef(125.5);
+  const initialBalanceRef = useRef(0);
 
   const [betAmount, setBetAmount] = useState<number>(5);
   const [totalStaked, setTotalStaked] = useState(0);
@@ -921,7 +924,12 @@ export default function PredictionMarketUI() {
                             if (result.success) {
                               setToast({
                                 type: "info",
-                                message: `Withdrawn ${(yellowBalance * 0.5).toFixed(2)} YELLOW_TEST_USD`,
+                                message: `Withdrawn ${(yellowBalance * 0.5).toFixed(2)} YELLOW_TEST_USD to your wallet`,
+                              });
+                            } else {
+                              setToast({
+                                type: "info",
+                                message: result.error || "Withdrawal failed",
                               });
                             }
                           }}
@@ -938,6 +946,11 @@ export default function PredictionMarketUI() {
                               setToast({
                                 type: "info",
                                 message: "Session settled! All profits withdrawn to your wallet.",
+                              });
+                            } else {
+                              setToast({
+                                type: "info",
+                                message: result.error || "Session settlement failed",
                               });
                             }
                           }}
