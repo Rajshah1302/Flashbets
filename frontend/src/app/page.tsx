@@ -28,6 +28,25 @@ import {
   bucketCenterY,
   getPendingStakeTotal,
 } from "@/lib/market";
+import {
+  createAuthRequestMessage,
+  createAuthVerifyMessage,
+  createEIP712AuthMessageSigner,
+  parseAnyRPCResponse,
+  RPCMethod,
+  type AuthChallengeResponse,
+  type AuthRequestParams,
+} from "@erc7824/nitrolite";
+import {
+  generateSessionKey,
+  getStoredSessionKey,
+  storeSessionKey,
+  removeSessionKey,
+  storeJWT,
+  removeJWT,
+  type SessionKey,
+} from "@/lib/utils";
+import { webSocketService, type WsStatus } from "@/lib/websocket";
 
 /* ===== local-only prediction market UI (no Yellow SDK) ===== */
 export default function PredictionMarketUI() {
@@ -37,9 +56,10 @@ export default function PredictionMarketUI() {
     { id: 1, name: "ETH/USD", icon: "Ξ", priceId: canonId(PYTH_IDS.ETHUSD) },
     { id: 2, name: "SOL/USD", icon: "◎", priceId: canonId(PYTH_IDS.SOLUSD) },
   ] as const;
+
   const {
     account,
-    walletClient,
+    walletClient, // (kept for future use)
     isConnecting,
     error,
     connectWallet,
@@ -49,9 +69,10 @@ export default function PredictionMarketUI() {
   const isWalletConnected = !!account;
   const formatAddress = (a: Address) => `${a.slice(0, 6)}...${a.slice(-4)}`;
 
+  const [wsStatus, setWsStatus] = useState<WsStatus>("Disconnected");
+
   const [selectedMarket, setSelectedMarket] = useState(0);
 
-  // Live prices via REST polling
   const pythPrices = usePythLatestREST(
     markets.map((m) => m.priceId),
     1000
@@ -59,7 +80,6 @@ export default function PredictionMarketUI() {
   const selectedPriceId = markets.find((m) => m.id === selectedMarket)!.priceId;
   const selectedLivePrice = pythPrices[selectedPriceId];
 
-  // Local/demo balance (no SDK)
   const [userBalance, setUserBalance] = useState<number>(10);
   const userBalanceRef = useRef(userBalance);
   useEffect(() => {
@@ -77,7 +97,15 @@ export default function PredictionMarketUI() {
       initialBalanceRef.current = userBalance;
     }
   }, []); // once
+  // CHAPTER 3: EIP-712 domain for authentication
+  const getAuthDomain = () => ({
+    name: "Flashbets",
+  });
 
+  // CHAPTER 3: Authentication constants
+  const AUTH_SCOPE = "flashbets.com";
+  const APP_NAME = "Flashbets";
+  const SESSION_DURATION = 3600; // 1 hour
   const [betAmount, setBetAmount] = useState<number>(5);
   const [totalStaked, setTotalStaked] = useState(0);
   const [totalWinnings, setTotalWinnings] = useState(0);
@@ -85,7 +113,12 @@ export default function PredictionMarketUI() {
   const [rounds, setRounds] = useState(() => seedRounds(10423));
   const [wins, setWins] = useState(0);
   const [completedBets, setCompletedBets] = useState(0);
-
+  // CHAPTER 3: Authentication state
+  const [sessionKey, setSessionKey] = useState<SessionKey | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthAttempted, setIsAuthAttempted] = useState(false);
+  const [sessionExpireTimestamp, setSessionExpireTimestamp] =
+    useState<string>("");
   type HistoryRow = {
     roundId: number;
     label: string;
@@ -318,7 +351,7 @@ export default function PredictionMarketUI() {
     };
   }, [selectedMarket]);
 
-  // place bet (local)
+  // place bet (local) + ✅ send over WS
   const handleBet = async (roundIndex: number, bucketId: number) => {
     const r = rounds[roundIndex];
     if (!r || r.revealed) return;
@@ -356,6 +389,15 @@ export default function PredictionMarketUI() {
       return updated;
     });
 
+    // ✅ NEW: emit JSON-RPC style message (server can ignore/queue if it wants)
+    webSocketService.send("bet/place", {
+      roundId: r.id,
+      bucketId,
+      amount: amt,
+      market: markets[selectedMarket].name,
+      address: account ?? null,
+    });
+
     setToast({ type: "info", message: "Bet placed (demo mode)" });
   };
 
@@ -389,9 +431,155 @@ export default function PredictionMarketUI() {
       });
   }, [rounds]);
 
+  // ✅ NEW: Connect WS on mount + subscribe to status
+  useEffect(() => {
+    // CHAPTER 3: Get or generate session key on startup (IMPORTANT: Store in localStorage)
+    const existingSessionKey = getStoredSessionKey();
+    if (existingSessionKey) {
+      setSessionKey(existingSessionKey);
+    } else {
+      const newSessionKey = generateSessionKey();
+      storeSessionKey(newSessionKey);
+      setSessionKey(newSessionKey);
+    }
+
+    webSocketService.addStatusListener(setWsStatus);
+    webSocketService.connect();
+
+    return () => {
+      webSocketService.removeStatusListener(setWsStatus);
+    };
+  }, []);
+
+  // CHAPTER 3: Auto-trigger authentication when conditions are met
+  useEffect(() => {
+    if (
+      account &&
+      sessionKey &&
+      wsStatus === "Connected" &&
+      !isAuthenticated &&
+      !isAuthAttempted
+    ) {
+      setIsAuthAttempted(true);
+
+      // Generate fresh timestamp for this auth attempt
+      const expireTimestamp = String(
+        Math.floor(Date.now() / 1000) + SESSION_DURATION
+      );
+      setSessionExpireTimestamp(expireTimestamp);
+
+      const authParams: AuthRequestParams = {
+        address: account,
+        session_key: sessionKey.address,
+        app_name: APP_NAME,
+        expire: expireTimestamp,
+        scope: AUTH_SCOPE,
+        application: account,
+        allowances: [],
+      };
+
+      createAuthRequestMessage(authParams).then((payload) => {
+        webSocketService.send(payload);
+      });
+    }
+  }, [account, sessionKey, wsStatus, isAuthenticated, isAuthAttempted]);
+
+  // CHAPTER 3: Handle server messages for authentication
+  useEffect(() => {
+    const handleMessage = async (data: any) => {
+      const response = parseAnyRPCResponse(JSON.stringify(data));
+
+      // Handle auth challenge
+      if (
+        response.method === RPCMethod.AuthChallenge &&
+        walletClient &&
+        sessionKey &&
+        account &&
+        sessionExpireTimestamp
+      ) {
+        const challengeResponse = response as AuthChallengeResponse;
+
+        const authParams = {
+          scope: AUTH_SCOPE,
+          application: walletClient.account?.address as `0x${string}`,
+          participant: sessionKey.address as `0x${string}`,
+          expire: sessionExpireTimestamp,
+          allowances: [],
+        };
+
+        const eip712Signer = createEIP712AuthMessageSigner(
+          walletClient,
+          authParams,
+          getAuthDomain()
+        );
+
+        try {
+          const authVerifyPayload = await createAuthVerifyMessage(
+            eip712Signer,
+            challengeResponse
+          );
+          webSocketService.send(authVerifyPayload);
+        } catch (error) {
+          alert("Signature rejected. Please try again.");
+          setIsAuthAttempted(false);
+        }
+      }
+
+      // Handle auth success
+      if (
+        response.method === RPCMethod.AuthVerify &&
+        response.params?.success
+      ) {
+        setIsAuthenticated(true);
+        if (response.params.jwtToken) storeJWT(response.params.jwtToken);
+      }
+
+      // Handle errors
+      if (response.method === RPCMethod.Error) {
+        removeJWT();
+        // Clear session key on auth failure to regenerate next time
+        removeSessionKey();
+        alert(`Authentication failed: ${response.params.error}`);
+        setIsAuthAttempted(false);
+      }
+    };
+
+    webSocketService.addMessageListener(handleMessage);
+    return () => webSocketService.removeMessageListener(handleMessage);
+  }, [walletClient, sessionKey, sessionExpireTimestamp, account]);
+
+  // ✅ NEW: Optional: subscribe on market change (server can ignore){}
+  useEffect(() => {
+    webSocketService.send("market/subscribe", {
+      priceId: selectedPriceId,
+      market: markets[selectedMarket].name,
+    });
+  }, [selectedPriceId, selectedMarket]);
+
+  // ✅ NEW: Optional: let server know when wallet connects
+  useEffect(() => {
+    if (account) {
+      webSocketService.send("wallet/connected", { address: account });
+    }
+  }, [account]);
+
+  // ✅ NEW: Optional: basic message hook (log or handle specific methods)
+  useEffect(() => {
+    const onMessage = (data: any) => {
+      // Example: { method: 'toast', params: { message: 'Welcome!' } }
+      if (data?.method === "toast" && data?.params?.message) {
+        setToast({ type: "info", message: String(data.params.message) });
+      }
+      // You can extend here to handle server-driven events.
+      // console.log("[ws] message:", data);
+    };
+    webSocketService.addMessageListener(onMessage);
+    return () => webSocketService.removeMessageListener(onMessage);
+  }, []);
+
+  // Toast hint when wallet is disconnected (no re-render loop)
   useEffect(() => {
     if (!isWalletConnected) {
-      // avoid spamming the same toast over and over
       setToast((prev) =>
         prev?.message === "Connect your wallet to place bets."
           ? prev
@@ -438,7 +626,31 @@ export default function PredictionMarketUI() {
               ))}
             </div>
 
-            <MarketViewToggle mode={viewMode} onChange={setViewMode} />
+            <div className="flex items-center gap-4">
+              {/* ✅ NEW: Realtime status pill */}
+              <div className="flex items-center gap-2 text-xs text-gray-400">
+                <span
+                  className={`inline-block w-2 h-2 rounded-full ${
+                    wsStatus === "Connected"
+                      ? "bg-green-500"
+                      : wsStatus === "Connecting"
+                      ? "bg-yellow-400"
+                      : "bg-gray-500"
+                  }`}
+                />
+                <span>Realtime: {wsStatus}</span>
+                {wsStatus === "Disconnected" && (
+                  <button
+                    onClick={() => webSocketService.connect()}
+                    className="ml-2 underline hover:text-gray-200"
+                  >
+                    Reconnect
+                  </button>
+                )}
+              </div>
+
+              <MarketViewToggle mode={viewMode} onChange={setViewMode} />
+            </div>
           </div>
         </div>
       </div>
@@ -732,13 +944,17 @@ export default function PredictionMarketUI() {
                   )}
                 </div>
 
-                {!isWalletConnected ? (
+                {!isWalletConnected || !isAuthenticated ? (
                   <button
                     onClick={connectWallet}
                     disabled={isConnecting}
                     className="w-full bg-yellow-500 hover:bg-yellow-600 text-black px-3 py-2 rounded text-sm font-medium disabled:opacity-50"
                   >
-                    {isConnecting ? "Connecting..." : "Connect Wallet"}
+                    {!isWalletConnected
+                      ? "Connect Wallet"
+                      : !isAuthenticated
+                      ? "Authenticating..."
+                      : "Support"}
                   </button>
                 ) : (
                   <div className="flex items-center gap-2">
@@ -748,9 +964,6 @@ export default function PredictionMarketUI() {
                     >
                       Disconnect
                     </button>
-                    <div className="text-[11px] text-emerald-300 whitespace-nowrap">
-                      Connected
-                    </div>
                   </div>
                 )}
 
@@ -765,6 +978,30 @@ export default function PredictionMarketUI() {
                     </button>
                   </div>
                 )}
+
+                {/* ✅ NEW: Realtime status inside the panel (duplicate for visibility) */}
+                <div className="mt-3 flex items-center justify-between text-xs text-gray-400">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`inline-block w-2 h-2 rounded-full ${
+                        wsStatus === "Connected"
+                          ? "bg-green-500"
+                          : wsStatus === "Connecting"
+                          ? "bg-yellow-400"
+                          : "bg-gray-500"
+                      }`}
+                    />
+                    <span>Realtime: {wsStatus} | Authenticated</span>
+                  </div>
+                  {wsStatus === "Disconnected" && (
+                    <button
+                      onClick={() => webSocketService.connect()}
+                      className="underline hover:text-gray-200"
+                    >
+                      Reconnect
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Quick amounts */}

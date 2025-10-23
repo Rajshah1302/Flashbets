@@ -17,31 +17,29 @@ export default function useWalletViem() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const connectWallet = useCallback(async () => {
-    try {
-      setError(null);
-      if (!window?.ethereum) {
-        setError("No wallet detected. Please install MetaMask or a compatible wallet.");
-        return false;
-      }
-      setIsConnecting(true);
-
-      const client = createWalletClient({
-        chain: mainnet,              
-        transport: custom(window.ethereum),
-      });
-
-      const [address] = await client.requestAddresses();
-      setWalletClient(client);
-      setAccount(address);
-      return true;
-    } catch (e: any) {
-      setError(e?.message ?? "Failed to connect wallet");
-      return false;
-    } finally {
-      setIsConnecting(false);
+  const connectWallet = async () => {
+    if (!window.ethereum) {
+        alert('Please install MetaMask!');
+        return;
     }
-  }, []);
+
+    // First get the address
+    const tempClient = createWalletClient({
+        chain: mainnet,
+        transport: custom(window.ethereum),
+    });
+    const [address] = await tempClient.requestAddresses();
+
+    // CHAPTER 3: Create wallet client with account for EIP-712 signing
+    const walletClient = createWalletClient({
+        account: address,
+        chain: mainnet,
+        transport: custom(window.ethereum),
+    });
+
+    setWalletClient(walletClient);
+    setAccount(address);
+};
 
   const disconnect = useCallback(() => {
     setAccount(null);
