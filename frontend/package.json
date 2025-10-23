@@ -10,8 +10,9 @@
   },
   "dependencies": {
     "@erc7824/nitrolite": "^0.4.0",
+    "@pythnetwork/price-service-client": "^1.9.1",
     "@tanstack/react-query": "^5.90.5",
-    "ethers": "^6.15.0",
+    "ethers": "^5.7.2",
     "lucide-react": "^0.546.0",
     "next": "15.5.6",
     "react": "19.1.0",
