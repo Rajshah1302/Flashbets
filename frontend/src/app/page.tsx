@@ -11,7 +11,6 @@ import usePythLatestREST from "@/hooks/usePyth";
 import useWalletViem from "@/hooks/useWallet";
 import type { Address } from "viem";
 import {
-  VISIBLE_ROUNDS,
   GRAPH_COLS,
   CURRENT_COL,
   REVEAL_EVERY_SECONDS,
@@ -36,6 +35,10 @@ import {
   RPCMethod,
   type AuthChallengeResponse,
   type AuthRequestParams,
+  createECDSAMessageSigner,
+  createGetLedgerBalancesMessage,
+  type GetLedgerBalancesResponse,
+  type BalanceUpdateResponse,
 } from "@erc7824/nitrolite";
 import {
   generateSessionKey,
@@ -48,9 +51,7 @@ import {
 } from "@/lib/utils";
 import { webSocketService, type WsStatus } from "@/lib/websocket";
 
-/* ===== local-only prediction market UI (no Yellow SDK) ===== */
 export default function PredictionMarketUI() {
-  // markets (canonical ids)
   const markets = [
     { id: 0, name: "BTC/USD", icon: "₿", priceId: canonId(PYTH_IDS.BTCUSD) },
     { id: 1, name: "ETH/USD", icon: "Ξ", priceId: canonId(PYTH_IDS.ETHUSD) },
@@ -59,7 +60,7 @@ export default function PredictionMarketUI() {
 
   const {
     account,
-    walletClient, // (kept for future use)
+    walletClient,
     isConnecting,
     error,
     connectWallet,
@@ -68,9 +69,17 @@ export default function PredictionMarketUI() {
   } = useWalletViem();
   const isWalletConnected = !!account;
   const formatAddress = (a: Address) => `${a.slice(0, 6)}...${a.slice(-4)}`;
+  const isJsonRpc = (m: any) =>
+    m && typeof m === "object" && m.jsonrpc === "2.0";
+  const isAuthishError = (msg?: string) =>
+    !!(msg && /auth|signature|eip|jwt|session|challenge|verify/i.test(msg));
 
   const [wsStatus, setWsStatus] = useState<WsStatus>("Disconnected");
-
+  const [ledgerBalances, setLedgerBalances] = useState<Record<
+    string,
+    string
+  > | null>(null);
+  const [isLoadingBalances, setIsLoadingBalances] = useState(false);
   const [selectedMarket, setSelectedMarket] = useState(0);
 
   const pythPrices = usePythLatestREST(
@@ -86,26 +95,17 @@ export default function PredictionMarketUI() {
     userBalanceRef.current = userBalance;
   }, [userBalance]);
 
-  // Remember initial balance for PnL
   const initialBalanceRef = useRef<number>(userBalance);
   useEffect(() => {
-    // Set once on first paint
-    if (
-      initialBalanceRef.current === undefined ||
-      initialBalanceRef.current === null
-    ) {
+    if (initialBalanceRef.current == null)
       initialBalanceRef.current = userBalance;
-    }
-  }, []); // once
-  // CHAPTER 3: EIP-712 domain for authentication
-  const getAuthDomain = () => ({
-    name: "Flashbets",
-  });
+  }, []);
 
-  // CHAPTER 3: Authentication constants
   const AUTH_SCOPE = "flashbets.com";
   const APP_NAME = "Flashbets";
-  const SESSION_DURATION = 3600; // 1 hour
+  const SESSION_DURATION = 3600;
+  const getAuthDomain = () => ({ name: "Flashbets" });
+
   const [betAmount, setBetAmount] = useState<number>(5);
   const [totalStaked, setTotalStaked] = useState(0);
   const [totalWinnings, setTotalWinnings] = useState(0);
@@ -113,12 +113,17 @@ export default function PredictionMarketUI() {
   const [rounds, setRounds] = useState(() => seedRounds(10423));
   const [wins, setWins] = useState(0);
   const [completedBets, setCompletedBets] = useState(0);
-  // CHAPTER 3: Authentication state
+
   const [sessionKey, setSessionKey] = useState<SessionKey | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isAuthAttempted, setIsAuthAttempted] = useState(false);
   const [sessionExpireTimestamp, setSessionExpireTimestamp] =
     useState<string>("");
+  const [authStatus, setAuthStatus] = useState<
+    "idle" | "pending" | "success" | "error"
+  >("idle");
+  const [authMessage, setAuthMessage] = useState("");
+
   type HistoryRow = {
     roundId: number;
     label: string;
@@ -142,38 +147,31 @@ export default function PredictionMarketUI() {
     return () => clearTimeout(t);
   }, [toast]);
 
-  // live refs
   const latestPriceRef = useRef(0);
   const prevRevealPriceRef = useRef<number | null>(null);
   const prevWinBucketRef = useRef<number | null>(null);
   const roundsRef = useRef(rounds);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastRevealAtRef = useRef(0);
-
   const [priceHistory, setPriceHistory] = useState([0]);
 
-  // update latest price from REST
   useEffect(() => {
     if (typeof selectedLivePrice === "number" && selectedLivePrice > 0) {
       latestPriceRef.current = selectedLivePrice;
       if (priceHistory.length === 1 && priceHistory[0] === 0) {
         setPriceHistory([selectedLivePrice]);
-        prevRevealPriceRef.current = selectedLivePrice; // seed baseline on first tick
+        prevRevealPriceRef.current = selectedLivePrice;
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLivePrice]);
-
   useEffect(() => {
     roundsRef.current = rounds;
   }, [rounds]);
 
-  /* keep both views mounted; just hide/show */
   const [viewMode, setViewMode] = useState<"betting" | "leaderboard">(
     "betting"
   );
 
-  /* leaderboard demo data */
   const leaderboardPlayers: LBPlayer[] = useMemo(
     () => [
       { id: "alpha", name: "Alpha", color: "#60a5fa", width: 1.8, z: 1 },
@@ -197,35 +195,28 @@ export default function PredictionMarketUI() {
     nexus: othersPnlRef.current.nexus,
     you: 0,
   });
-
   const [settleCounter, setSettleCounter] = useState(0);
 
-  // reset on market change
   useEffect(() => {
     setPriceHistory([0]);
     latestPriceRef.current = 0;
     prevRevealPriceRef.current = null;
     prevWinBucketRef.current = null;
-
     setRounds(seedRounds(10423));
     setTimeLeft(REVEAL_EVERY_SECONDS);
     lastRevealAtRef.current = 0;
-
     setWins(0);
     setCompletedBets(0);
     setTotalStaked(0);
     setTotalWinnings(0);
     setBetHistory([]);
-
     othersPnlRef.current = { alpha: 8.5, blaze: 6.2, nexus: 5.1 };
     setLatestLeaderProfits({ ...othersPnlRef.current, you: 0 });
     setSettleCounter(0);
   }, [selectedMarket]);
 
-  // timer / reveal
   useEffect(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
-
     intervalRef.current = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
@@ -233,7 +224,6 @@ export default function PredictionMarketUI() {
           if (now - lastRevealAtRef.current < REVEAL_EVERY_SECONDS * 1000 - 50)
             return REVEAL_EVERY_SECONDS;
           lastRevealAtRef.current = now;
-
           const spot = latestPriceRef.current || 0;
           const baseline = prevRevealPriceRef.current ?? spot;
           const changePct =
@@ -242,33 +232,26 @@ export default function PredictionMarketUI() {
             changePct,
             prevWinBucketRef.current
           );
-
           const i = CURRENT_COL;
           const snapshot = roundsRef.current[i];
           let nextUserBalance = userBalanceRef.current;
-
           if (snapshot && !snapshot.settled) {
             const totalPool = snapshot.buckets.reduce((s, b) => s + b.bets, 0);
             const winnerPool = snapshot.buckets[winningBucket].bets;
             const userBetBucket = snapshot.buckets.find(
               (b) => b.userBet != null
             );
-
             if (userBetBucket) {
               const stake = userBetBucket.userBet!;
               setCompletedBets((c) => c + 1);
-
               if (userBetBucket.id === winningBucket) {
                 const payout = totalPool * (stake / winnerPool);
-                nextUserBalance = userBalanceRef.current + payout; // stake already deducted
+                nextUserBalance = userBalanceRef.current + payout;
                 setUserBalance(nextUserBalance);
                 setWins((w) => w + 1);
                 setToast({ type: "win", amount: payout - stake });
                 setTotalWinnings((tw) => tw + payout);
-              } else {
-                setToast({ type: "lose", amount: stake });
-              }
-
+              } else setToast({ type: "lose", amount: stake });
               setBetHistory((prevH) => [
                 ...prevH.slice(-99),
                 {
@@ -290,8 +273,6 @@ export default function PredictionMarketUI() {
               ]);
             }
           }
-
-          // next rounds window
           const nextRounds = (() => {
             let next = roundsRef.current.slice();
             if (next[i])
@@ -308,75 +289,56 @@ export default function PredictionMarketUI() {
             next.push(newRound(lastId + 1));
             return next;
           })();
-
           setRounds(nextRounds);
-
-          // price history slide
           setPriceHistory((ph) => {
             const extended = [...ph, spot];
             while (extended.length > 64) extended.shift();
             return extended;
           });
-
-          // update tie-break & baseline
           prevWinBucketRef.current = winningBucket;
           prevRevealPriceRef.current = spot;
-
-          // leaderboard pnl (demo drift)
           const drift = () => (Math.random() - 0.45) * 100;
           othersPnlRef.current.alpha += drift();
           othersPnlRef.current.blaze += drift();
           othersPnlRef.current.nexus += drift();
-
           const pendingAfter = getPendingStakeTotal(nextRounds);
           const youPnlExact =
             nextUserBalance + pendingAfter - initialBalanceRef.current;
-
           setLatestLeaderProfits({
             alpha: +othersPnlRef.current.alpha,
             blaze: +othersPnlRef.current.blaze,
             nexus: +othersPnlRef.current.nexus,
             you: youPnlExact,
           });
-
           setSettleCounter((c) => c + 1);
           return REVEAL_EVERY_SECONDS;
         }
         return prev - 1;
       });
     }, 1000);
-
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [selectedMarket]);
 
-  // place bet (local) + ✅ send over WS
   const handleBet = async (roundIndex: number, bucketId: number) => {
     const r = rounds[roundIndex];
     if (!r || r.revealed) return;
     if (roundIndex <= CURRENT_COL) return;
-
     const alreadyPlaced = r.buckets.some(
       (b) => b.userBet != null && b.id !== bucketId
     );
-    if (alreadyPlaced) {
-      setToast({
+    if (alreadyPlaced)
+      return setToast({
         type: "info",
         message: "You already placed a bet this round.",
       });
-      return;
-    }
-
     const v = Number.isFinite(betAmount) ? betAmount : MIN_BET;
     const clamped = Math.max(MIN_BET, Math.min(v, userBalance));
     const amt = fromCents(toCents(clamped));
     if (amt <= 0) return;
-
-    // deduct locally
     setUserBalance((prev) => fromCents(toCents(prev) - toCents(amt)));
     setTotalStaked((ts) => ts + amt);
-
     setRounds((prevR) => {
       const updated = prevR.slice();
       const round = updated[roundIndex];
@@ -388,8 +350,6 @@ export default function PredictionMarketUI() {
       updated[roundIndex] = { ...round, buckets };
       return updated;
     });
-
-    // ✅ NEW: emit JSON-RPC style message (server can ignore/queue if it wants)
     webSocketService.send("bet/place", {
       roundId: r.id,
       bucketId,
@@ -397,11 +357,9 @@ export default function PredictionMarketUI() {
       market: markets[selectedMarket].name,
       address: account ?? null,
     });
-
     setToast({ type: "info", message: "Bet placed (demo mode)" });
   };
 
-  // derived
   const pendingStakeTotal = useMemo(
     () => getPendingStakeTotal(rounds),
     [rounds]
@@ -411,7 +369,6 @@ export default function PredictionMarketUI() {
   const roundProgress =
     (REVEAL_EVERY_SECONDS - timeLeft) / REVEAL_EVERY_SECONDS;
   const winRate = completedBets ? (wins / completedBets) * 100 : 0;
-
   const activeBets = useMemo(() => {
     return rounds
       .map((r, idx) => ({ r, idx }))
@@ -431,153 +388,238 @@ export default function PredictionMarketUI() {
       });
   }, [rounds]);
 
-  // ✅ NEW: Connect WS on mount + subscribe to status
   useEffect(() => {
-    // CHAPTER 3: Get or generate session key on startup (IMPORTANT: Store in localStorage)
     const existingSessionKey = getStoredSessionKey();
-    if (existingSessionKey) {
-      setSessionKey(existingSessionKey);
-    } else {
+    if (existingSessionKey) setSessionKey(existingSessionKey);
+    else {
       const newSessionKey = generateSessionKey();
       storeSessionKey(newSessionKey);
       setSessionKey(newSessionKey);
     }
-
     webSocketService.addStatusListener(setWsStatus);
     webSocketService.connect();
-
     return () => {
       webSocketService.removeStatusListener(setWsStatus);
     };
   }, []);
 
-  // CHAPTER 3: Auto-trigger authentication when conditions are met
+  const accountRef = useRef<Address | null>(null);
+  const walletClientRef = useRef<typeof walletClient>(null);
+  const sessionKeyRef = useRef<SessionKey | null>(null);
+  const isAuthenticatedRef = useRef(false);
+  const sessionExpireRef = useRef<string>("");
+
   useEffect(() => {
-    if (
-      account &&
-      sessionKey &&
-      wsStatus === "Connected" &&
-      !isAuthenticated &&
-      !isAuthAttempted
-    ) {
-      setIsAuthAttempted(true);
+    accountRef.current = account ?? null;
+  }, [account]);
+  useEffect(() => {
+    walletClientRef.current = walletClient ?? null;
+  }, [walletClient]);
+  useEffect(() => {
+    sessionKeyRef.current = sessionKey;
+  }, [sessionKey]);
+  useEffect(() => {
+    isAuthenticatedRef.current = isAuthenticated;
+  }, [isAuthenticated]);
+  useEffect(() => {
+    sessionExpireRef.current = sessionExpireTimestamp;
+  }, [sessionExpireTimestamp]);
 
-      // Generate fresh timestamp for this auth attempt
-      const expireTimestamp = String(
-        Math.floor(Date.now() / 1000) + SESSION_DURATION
-      );
-      setSessionExpireTimestamp(expireTimestamp);
+  const authInFlightRef = useRef(false);
+  const sentVerifyRef = useRef(false);
+  const lastAuthKeyRef = useRef<string | null>(null);
+  const balancesKeyRef = useRef<string | null>(null);
 
-      const authParams: AuthRequestParams = {
-        address: account,
-        session_key: sessionKey.address,
-        app_name: APP_NAME,
-        expire: expireTimestamp,
-        scope: AUTH_SCOPE,
-        application: account,
-        allowances: [],
-      };
-
-      createAuthRequestMessage(authParams).then((payload) => {
-        webSocketService.send(payload);
+  useEffect(() => {
+    if (wsStatus !== "Connected") return;
+    if (!account || !walletClient || !sessionKey) return;
+    if (isAuthenticatedRef.current || authInFlightRef.current) return;
+    const expire = String(Math.floor(Date.now() / 1000) + SESSION_DURATION);
+    const authKey = `${account}:${sessionKey.address}:${expire}`;
+    if (lastAuthKeyRef.current === authKey) return;
+    lastAuthKeyRef.current = authKey;
+    authInFlightRef.current = true;
+    sentVerifyRef.current = false;
+    setIsAuthAttempted(true);
+    setSessionExpireTimestamp(expire);
+    setAuthStatus("pending");
+    setAuthMessage("Requesting challenge…");
+    const authParams: AuthRequestParams = {
+      address: account,
+      session_key: sessionKey.address,
+      app_name: APP_NAME,
+      expire,
+      scope: AUTH_SCOPE,
+      application: account,
+      allowances: [],
+    };
+    createAuthRequestMessage(authParams)
+      .then((payload) => webSocketService.send(payload))
+      .catch((err) => {
+        console.error("[auth] request build failed:", err);
+        authInFlightRef.current = false;
+        setIsAuthAttempted(false);
+        setAuthStatus("error");
+        setAuthMessage("Failed to build auth request");
       });
-    }
-  }, [account, sessionKey, wsStatus, isAuthenticated, isAuthAttempted]);
+  }, [wsStatus, account, walletClient, sessionKey]);
 
-  // CHAPTER 3: Handle server messages for authentication
   useEffect(() => {
     const handleMessage = async (data: any) => {
-      const response = parseAnyRPCResponse(JSON.stringify(data));
-
-      // Handle auth challenge
-      if (
-        response.method === RPCMethod.AuthChallenge &&
-        walletClient &&
-        sessionKey &&
-        account &&
-        sessionExpireTimestamp
-      ) {
-        const challengeResponse = response as AuthChallengeResponse;
-
-        const authParams = {
-          scope: AUTH_SCOPE,
-          application: walletClient.account?.address as `0x${string}`,
-          participant: sessionKey.address as `0x${string}`,
-          expire: sessionExpireTimestamp,
-          allowances: [],
-        };
-
-        const eip712Signer = createEIP712AuthMessageSigner(
-          walletClient,
-          authParams,
-          getAuthDomain()
-        );
-
-        try {
-          const authVerifyPayload = await createAuthVerifyMessage(
-            eip712Signer,
-            challengeResponse
+      let response: any;
+      try {
+        response = parseAnyRPCResponse(JSON.stringify(data));
+      } catch {
+        if (data?.method === "toast" && data?.params?.message)
+          setToast({ type: "info", message: String(data.params.message) });
+        return;
+      }
+      switch (response.method) {
+        case RPCMethod.AuthChallenge: {
+          if (!authInFlightRef.current) return;
+          const wc = walletClientRef.current,
+            sk = sessionKeyRef.current,
+            acc = accountRef.current,
+            expire = sessionExpireRef.current;
+          if (!wc || !sk || !acc || !expire) return;
+          if (sentVerifyRef.current) return;
+          setAuthStatus("pending");
+          setAuthMessage("Signing challenge…");
+          const authParams = {
+            scope: AUTH_SCOPE,
+            application: wc.account?.address as `0x${string}`,
+            participant: sk.address as `0x${string}`,
+            expire,
+            allowances: [],
+          };
+          const signer = createEIP712AuthMessageSigner(
+            wc,
+            authParams,
+            getAuthDomain()
           );
-          webSocketService.send(authVerifyPayload);
-        } catch (error) {
-          alert("Signature rejected. Please try again.");
+          try {
+            sentVerifyRef.current = true;
+            const verifyPayload = await createAuthVerifyMessage(
+              signer,
+              response as AuthChallengeResponse
+            );
+            webSocketService.send(verifyPayload);
+          } catch (err) {
+            console.error("[auth] verify failed:", err);
+            sentVerifyRef.current = false;
+            authInFlightRef.current = false;
+            setIsAuthAttempted(false);
+            setAuthStatus("error");
+            setAuthMessage("User rejected or sign error");
+          }
+          break;
+        }
+        case RPCMethod.AuthVerify: {
+          if (response.params?.success) {
+            setIsAuthenticated(true);
+            if (response.params.jwtToken) storeJWT(response.params.jwtToken);
+            setAuthStatus("success");
+            setAuthMessage("");
+          } else {
+            setIsAuthenticated(false);
+            setAuthStatus("error");
+            setAuthMessage(response.params?.error ?? "Auth failed");
+          }
+          authInFlightRef.current = false;
+          sentVerifyRef.current = false;
+          break;
+        }
+        case RPCMethod.Error: {
+          removeJWT();
+          removeSessionKey();
+          setIsAuthenticated(false);
           setIsAuthAttempted(false);
+          authInFlightRef.current = false;
+          sentVerifyRef.current = false;
+          setAuthStatus("error");
+          setAuthMessage(response.params?.error ?? "Unknown error");
+          break;
+        }
+        case RPCMethod.GetLedgerBalances: {
+          const list =
+            (response as GetLedgerBalancesResponse).params?.ledgerBalances ??
+            [];
+          const map = Object.fromEntries(list.map((b) => [b.asset, b.amount]));
+          setLedgerBalances(map);
+          setIsLoadingBalances(false);
+          break;
+        }
+        case RPCMethod.BalanceUpdate: {
+          const list =
+            (response as BalanceUpdateResponse).params?.balanceUpdates ?? [];
+          setLedgerBalances((prev) => {
+            const base = { ...(prev ?? {}) };
+            for (const b of list) base[b.asset] = b.amount;
+            return base;
+          });
+          break;
+        }
+        default: {
+          if (response?.method === "toast" && response?.params?.message)
+            setToast({
+              type: "info",
+              message: String(response.params.message),
+            });
         }
       }
-
-      // Handle auth success
-      if (
-        response.method === RPCMethod.AuthVerify &&
-        response.params?.success
-      ) {
-        setIsAuthenticated(true);
-        if (response.params.jwtToken) storeJWT(response.params.jwtToken);
-      }
-
-      // Handle errors
-      if (response.method === RPCMethod.Error) {
-        removeJWT();
-        // Clear session key on auth failure to regenerate next time
-        removeSessionKey();
-        alert(`Authentication failed: ${response.params.error}`);
-        setIsAuthAttempted(false);
-      }
     };
-
     webSocketService.addMessageListener(handleMessage);
     return () => webSocketService.removeMessageListener(handleMessage);
-  }, [walletClient, sessionKey, sessionExpireTimestamp, account]);
+  }, []);
 
-  // ✅ NEW: Optional: subscribe on market change (server can ignore){}
   useEffect(() => {
+    if (!isAuthenticated || !sessionKey || !account) return;
+    const key = `${account}:${sessionKey.address}`;
+    if (balancesKeyRef.current === key) return;
+    balancesKeyRef.current = key;
+    setIsLoadingBalances(true);
+    try {
+      const signer = createECDSAMessageSigner(sessionKey.privateKey);
+      createGetLedgerBalancesMessage(signer, account)
+        .then((payload) => webSocketService.send(payload))
+        .catch((err) => {
+          console.error("[balances] request build failed:", err);
+          setIsLoadingBalances(false);
+        });
+    } catch (err) {
+      console.error("[balances] signer error:", err);
+      setIsLoadingBalances(false);
+    }
+  }, [isAuthenticated, sessionKey, account]);
+
+  useEffect(() => {
+    if (wsStatus !== "Connected") return;
     webSocketService.send("market/subscribe", {
       priceId: selectedPriceId,
       market: markets[selectedMarket].name,
     });
-  }, [selectedPriceId, selectedMarket]);
+  }, [wsStatus, selectedPriceId, selectedMarket]);
 
-  // ✅ NEW: Optional: let server know when wallet connects
   useEffect(() => {
-    if (account) {
+    if (account && wsStatus === "Connected")
       webSocketService.send("wallet/connected", { address: account });
+  }, [account, wsStatus]);
+
+  useEffect(() => {
+    if (!account) {
+      setIsAuthenticated(false);
+      setIsAuthAttempted(false);
+      setIsLoadingBalances(false);
+      setLedgerBalances(null);
+      authInFlightRef.current = false;
+      sentVerifyRef.current = false;
+      lastAuthKeyRef.current = null;
+      balancesKeyRef.current = null;
+      setAuthStatus("idle");
+      setAuthMessage("");
     }
   }, [account]);
 
-  // ✅ NEW: Optional: basic message hook (log or handle specific methods)
-  useEffect(() => {
-    const onMessage = (data: any) => {
-      // Example: { method: 'toast', params: { message: 'Welcome!' } }
-      if (data?.method === "toast" && data?.params?.message) {
-        setToast({ type: "info", message: String(data.params.message) });
-      }
-      // You can extend here to handle server-driven events.
-      // console.log("[ws] message:", data);
-    };
-    webSocketService.addMessageListener(onMessage);
-    return () => webSocketService.removeMessageListener(onMessage);
-  }, []);
-
-  // Toast hint when wallet is disconnected (no re-render loop)
   useEffect(() => {
     if (!isWalletConnected) {
       setToast((prev) =>
@@ -588,11 +630,26 @@ export default function PredictionMarketUI() {
     }
   }, [isWalletConnected]);
 
+  const authDotClass =
+    authStatus === "success"
+      ? "bg-green-500"
+      : authStatus === "pending"
+      ? "bg-yellow-400"
+      : authStatus === "error"
+      ? "bg-red-500"
+      : "bg-gray-500";
+  const authLabel =
+    authStatus === "success"
+      ? "OK"
+      : authStatus === "pending"
+      ? "Pending"
+      : authStatus === "error"
+      ? "Failed"
+      : "Idle";
+
   return (
     <div className="min-h-screen bg-black text-gray-100">
       <NavBar />
-
-      {/* Market Selector + Toggle */}
       <div className="border-b border-gray-800/50 bg-gray-900/20">
         <div className="max-w-9xl mx-auto px-6">
           <div className="flex items-center justify-between gap-4 py-2">
@@ -625,10 +682,8 @@ export default function PredictionMarketUI() {
                 </button>
               ))}
             </div>
-
-            <div className="flex items-center gap-4">
-              {/* ✅ NEW: Realtime status pill */}
-              <div className="flex items-center gap-2 text-xs text-gray-400">
+            <div className="flex items-center gap-6 text-xs text-gray-400">
+              <div className="flex items-center gap-2">
                 <span
                   className={`inline-block w-2 h-2 rounded-full ${
                     wsStatus === "Connected"
@@ -648,22 +703,28 @@ export default function PredictionMarketUI() {
                   </button>
                 )}
               </div>
-
+              <div className="flex items-center gap-2">
+                <span
+                  className={`inline-block w-2 h-2 rounded-full ${authDotClass}`}
+                />
+                <span>Auth: {authLabel}</span>
+                {authStatus === "error" && authMessage && (
+                  <span className="text-red-400 ml-1 max-w-[200px] truncate">
+                    ({authMessage})
+                  </span>
+                )}
+              </div>
               <MarketViewToggle mode={viewMode} onChange={setViewMode} />
             </div>
           </div>
         </div>
       </div>
 
-      {/* Main */}
       <div className="max-w-9xl mx-auto px-6 py-8">
         <div className="flex gap-6">
-          {/* LEFT */}
           <div className="flex-1">
-            {/* Betting view */}
             <div className={viewMode === "betting" ? "block" : "hidden"}>
               <div className="bg-gray-900/30 border border-gray-800/50 rounded-xl overflow-hidden">
-                {/* Header */}
                 <div className="grid grid-cols-13 border-b border-gray-800/50 bg-black/20">
                   <div className="col-span-1 p-3 text-xs font-medium text-gray-500 border-r border-gray-800/50">
                     Round
@@ -688,9 +749,7 @@ export default function PredictionMarketUI() {
                   ))}
                 </div>
 
-                {/* Chart/Grid Area */}
                 <div className="relative">
-                  {/* Row labels */}
                   <div className="absolute left-0 top-0 bottom-0 w-23 border-r border-gray-800/50 bg-black/20 z-10">
                     {[
                       { id: 0, label: "Strong Bull" },
@@ -718,7 +777,6 @@ export default function PredictionMarketUI() {
                     })}
                   </div>
 
-                  {/* Columns */}
                   <div
                     className="ml-23 grid grid-cols-12 relative"
                     style={{ height: "512px" }}
@@ -727,7 +785,6 @@ export default function PredictionMarketUI() {
                       const isGraphSide = roundIdx < GRAPH_COLS;
                       const isCurrent = roundIdx === CURRENT_COL;
                       const isPastOrCurrent = roundIdx <= CURRENT_COL;
-
                       return (
                         <div
                           key={round.id}
@@ -800,7 +857,6 @@ export default function PredictionMarketUI() {
                                         />
                                       )}
                                     </svg>
-
                                     {typeof round.changePct === "number" && (
                                       <div
                                         className="absolute left-0 right-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
@@ -874,7 +930,6 @@ export default function PredictionMarketUI() {
                               })}
                             </div>
                           )}
-
                           {isCurrent && (
                             <div className="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 bg-gradient-to-r from-amber-400 via-amber-500 " />
                           )}
@@ -906,7 +961,6 @@ export default function PredictionMarketUI() {
               </div>
             </div>
 
-            {/* Leaderboard view */}
             <div className={viewMode === "leaderboard" ? "block" : "hidden"}>
               <LeaderboardCombinedChart
                 players={leaderboardPlayers}
@@ -924,14 +978,12 @@ export default function PredictionMarketUI() {
             </div>
           </div>
 
-          {/* RIGHT: Stats / Bet controls */}
           <aside className="w-full md:w-80 shrink-0">
             <div className="bg-gray-900/30 border border-gray-800/50 rounded-xl p-4 sticky top-6">
               <h3 className="text-sm font-semibold text-gray-200 mb-3">
                 Bet Panel
               </h3>
 
-              {/* Wallet connection */}
               <div className="mb-6 p-4 bg-gray-800/50 rounded-lg border border-gray-700/50">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium text-gray-200">
@@ -979,32 +1031,43 @@ export default function PredictionMarketUI() {
                   </div>
                 )}
 
-                {/* ✅ NEW: Realtime status inside the panel (duplicate for visibility) */}
-                <div className="mt-3 flex items-center justify-between text-xs text-gray-400">
+                <div className="mt-3 space-y-2 text-xs">
+                  <div className="flex items-center justify-between text-gray-400">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`inline-block w-2 h-2 rounded-full ${
+                          wsStatus === "Connected"
+                            ? "bg-green-500"
+                            : wsStatus === "Connecting"
+                            ? "bg-yellow-400"
+                            : "bg-gray-500"
+                        }`}
+                      />
+                      <span>Realtime: {wsStatus}</span>
+                    </div>
+                    {wsStatus === "Disconnected" && (
+                      <button
+                        onClick={() => webSocketService.connect()}
+                        className="underline hover:text-gray-200"
+                      >
+                        Reconnect
+                      </button>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2">
                     <span
-                      className={`inline-block w-2 h-2 rounded-full ${
-                        wsStatus === "Connected"
-                          ? "bg-green-500"
-                          : wsStatus === "Connecting"
-                          ? "bg-yellow-400"
-                          : "bg-gray-500"
-                      }`}
+                      className={`inline-block w-2 h-2 rounded-full ${authDotClass}`}
                     />
-                    <span>Realtime: {wsStatus} | Authenticated</span>
+                    <span className="text-gray-400">Auth: {authLabel}</span>
+                    {authStatus === "error" && !!authMessage && (
+                      <span className="text-red-400 truncate">
+                        ({authMessage})
+                      </span>
+                    )}
                   </div>
-                  {wsStatus === "Disconnected" && (
-                    <button
-                      onClick={() => webSocketService.connect()}
-                      className="underline hover:text-gray-200"
-                    >
-                      Reconnect
-                    </button>
-                  )}
                 </div>
               </div>
 
-              {/* Quick amounts */}
               <div>
                 <div className="text-xs text-gray-500 mb-2">Quick Amounts</div>
                 <div className="flex flex-wrap gap-2">
@@ -1024,7 +1087,6 @@ export default function PredictionMarketUI() {
                 </div>
               </div>
 
-              {/* Custom amount */}
               <div className="mt-4">
                 <div className="text-xs text-gray-500 mb-2">
                   Custom Amount (USD)
@@ -1051,23 +1113,46 @@ export default function PredictionMarketUI() {
                 </div>
               </div>
 
-              {/* Divider */}
               <div className="h-px bg-gray-800/60 my-4" />
 
-              {/* Stats */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-black/20 border border-gray-800 rounded p-3">
                   <div className="text-[11px] text-gray-500 mb-1">Balance</div>
-                  <div className="font-mono font-semibold">
-                    ${formatUSD(userBalance)}
-                  </div>
-                  <button
-                    onClick={() => setUserBalance((b) => b + 10)}
-                    className="mt-2 text-[11px] underline text-amber-400 hover:text-amber-300"
-                  >
-                    + Add $10 demo funds
-                  </button>
+                  {isAuthenticated ? (
+                    <>
+                      <div className="font-mono font-semibold">
+                        {isLoadingBalances
+                          ? "Loading..."
+                          : (() => {
+                              const usdcStr =
+                                ledgerBalances?.["USDC"] ??
+                                ledgerBalances?.["usdc"] ??
+                                "0";
+                              const usdc = Number.parseFloat(usdcStr || "0");
+                              return `$${formatUSD(
+                                Number.isFinite(usdc) ? usdc : 0
+                              )}`;
+                            })()}
+                      </div>
+                      <div className="text-[11px] text-gray-500 mt-1">
+                        Nitrolite (USDC)
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="font-mono font-semibold">
+                        ${formatUSD(userBalance)}
+                      </div>
+                      <button
+                        onClick={() => setUserBalance((b) => b + 10)}
+                        className="mt-2 text-[11px] underline text-amber-400 hover:text-amber-300"
+                      >
+                        + Add $10 demo funds
+                      </button>
+                    </>
+                  )}
                 </div>
+
                 <div className="bg-black/20 border border-gray-800 rounded p-3">
                   <div className="text-[11px] text-gray-500 mb-1">P/L</div>
                   <div
@@ -1079,6 +1164,7 @@ export default function PredictionMarketUI() {
                     {formatUSD(Math.abs(pnlDisplay))}
                   </div>
                 </div>
+
                 <div className="bg-black/20 border border-gray-800 rounded p-3">
                   <div className="text-[11px] text-gray-500 mb-1">
                     Total Winnings
@@ -1087,6 +1173,7 @@ export default function PredictionMarketUI() {
                     ${formatUSD(totalWinnings)}
                   </div>
                 </div>
+
                 <div className="bg-black/20 border border-gray-800 rounded p-3">
                   <div className="text-[11px] text-gray-500 mb-1">
                     Total Staked
@@ -1095,10 +1182,12 @@ export default function PredictionMarketUI() {
                     ${formatUSD(totalStaked)}
                   </div>
                 </div>
+
                 <div className="bg-black/20 border border-gray-800 rounded p-3">
                   <div className="text-[11px] text-gray-500 mb-1">Wins</div>
                   <div className="font-mono font-semibold">{wins}</div>
                 </div>
+
                 <div className="bg-black/20 border border-gray-800 rounded p-3">
                   <div className="text-[11px] text-gray-500 mb-1">Win Rate</div>
                   <div className="font-mono font-semibold">
@@ -1110,7 +1199,6 @@ export default function PredictionMarketUI() {
           </aside>
         </div>
 
-        {/* Bets table */}
         <div className="mt-8">
           <section className="bg-gray-900/30 border border-gray-800/50 rounded-xl p-4">
             <h3 className="text-sm font-semibold text-gray-200 mb-3">Bets</h3>
@@ -1119,7 +1207,6 @@ export default function PredictionMarketUI() {
         </div>
       </div>
 
-      {/* simple toast */}
       {toast && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 border border-gray-700 rounded px-4 py-2 text-sm shadow-lg">
           {toast.message ??
