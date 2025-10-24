@@ -1,4 +1,3 @@
-// components/PredictionMarketUI.tsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -69,16 +68,9 @@ export default function PredictionMarketUI() {
   } = useWalletViem();
   const isWalletConnected = !!account;
   const formatAddress = (a: Address) => `${a.slice(0, 6)}...${a.slice(-4)}`;
-  const isJsonRpc = (m: any) =>
-    m && typeof m === "object" && m.jsonrpc === "2.0";
-  const isAuthishError = (msg?: string) =>
-    !!(msg && /auth|signature|eip|jwt|session|challenge|verify/i.test(msg));
 
   const [wsStatus, setWsStatus] = useState<WsStatus>("Disconnected");
-  const [ledgerBalances, setLedgerBalances] = useState<Record<
-    string,
-    string
-  > | null>(null);
+  const [ledgerBalances, setLedgerBalances] = useState(null);
   const [isLoadingBalances, setIsLoadingBalances] = useState(false);
   const [selectedMarket, setSelectedMarket] = useState(0);
 
@@ -116,7 +108,6 @@ export default function PredictionMarketUI() {
 
   const [sessionKey, setSessionKey] = useState<SessionKey | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [isAuthAttempted, setIsAuthAttempted] = useState(false);
   const [sessionExpireTimestamp, setSessionExpireTimestamp] =
     useState<string>("");
   const [authStatus, setAuthStatus] = useState<
@@ -398,9 +389,7 @@ export default function PredictionMarketUI() {
     }
     webSocketService.addStatusListener(setWsStatus);
     webSocketService.connect();
-    return () => {
-      webSocketService.removeStatusListener(setWsStatus);
-    };
+    return () => webSocketService.removeStatusListener(setWsStatus);
   }, []);
 
   const accountRef = useRef<Address | null>(null);
@@ -440,7 +429,6 @@ export default function PredictionMarketUI() {
     lastAuthKeyRef.current = authKey;
     authInFlightRef.current = true;
     sentVerifyRef.current = false;
-    setIsAuthAttempted(true);
     setSessionExpireTimestamp(expire);
     setAuthStatus("pending");
     setAuthMessage("Requesting challenge…");
@@ -458,7 +446,6 @@ export default function PredictionMarketUI() {
       .catch((err) => {
         console.error("[auth] request build failed:", err);
         authInFlightRef.current = false;
-        setIsAuthAttempted(false);
         setAuthStatus("error");
         setAuthMessage("Failed to build auth request");
       });
@@ -508,7 +495,6 @@ export default function PredictionMarketUI() {
             console.error("[auth] verify failed:", err);
             sentVerifyRef.current = false;
             authInFlightRef.current = false;
-            setIsAuthAttempted(false);
             setAuthStatus("error");
             setAuthMessage("User rejected or sign error");
           }
@@ -520,6 +506,7 @@ export default function PredictionMarketUI() {
             if (response.params.jwtToken) storeJWT(response.params.jwtToken);
             setAuthStatus("success");
             setAuthMessage("");
+            setToast({ type: "info", message: "Authentication successful!" });
           } else {
             setIsAuthenticated(false);
             setAuthStatus("error");
@@ -530,14 +517,17 @@ export default function PredictionMarketUI() {
           break;
         }
         case RPCMethod.Error: {
-          removeJWT();
-          removeSessionKey();
-          setIsAuthenticated(false);
-          setIsAuthAttempted(false);
-          authInFlightRef.current = false;
-          sentVerifyRef.current = false;
-          setAuthStatus("error");
-          setAuthMessage(response.params?.error ?? "Unknown error");
+          const errMsg = response.params?.error ?? "Unknown error";
+          console.error("[ws] error response:", errMsg);
+          if (!isAuthenticatedRef.current) {
+            removeJWT();
+            removeSessionKey();
+            setIsAuthenticated(false);
+            authInFlightRef.current = false;
+            sentVerifyRef.current = false;
+            setAuthStatus("error");
+            setAuthMessage(errMsg);
+          }
           break;
         }
         case RPCMethod.GetLedgerBalances: {
@@ -608,7 +598,6 @@ export default function PredictionMarketUI() {
   useEffect(() => {
     if (!account) {
       setIsAuthenticated(false);
-      setIsAuthAttempted(false);
       setIsLoadingBalances(false);
       setLedgerBalances(null);
       authInFlightRef.current = false;
@@ -1031,41 +1020,20 @@ export default function PredictionMarketUI() {
                   </div>
                 )}
 
-                <div className="mt-3 space-y-2 text-xs">
+                {/* <div className="mt-3 space-y-2 text-xs">
                   <div className="flex items-center justify-between text-gray-400">
                     <div className="flex items-center gap-2">
-                      <span
-                        className={`inline-block w-2 h-2 rounded-full ${
-                          wsStatus === "Connected"
-                            ? "bg-green-500"
-                            : wsStatus === "Connecting"
-                            ? "bg-yellow-400"
-                            : "bg-gray-500"
-                        }`}
-                      />
+                      <span className={`inline-block w-2 h-2 rounded-full ${wsStatus === "Connected" ? "bg-green-500" : wsStatus === "Connecting" ? "bg-yellow-400" : "bg-gray-500"}`} />
                       <span>Realtime: {wsStatus}</span>
                     </div>
-                    {wsStatus === "Disconnected" && (
-                      <button
-                        onClick={() => webSocketService.connect()}
-                        className="underline hover:text-gray-200"
-                      >
-                        Reconnect
-                      </button>
-                    )}
+                    {wsStatus === "Disconnected" && <button onClick={() => webSocketService.connect()} className="underline hover:text-gray-200">Reconnect</button>}
                   </div>
                   <div className="flex items-center gap-2">
-                    <span
-                      className={`inline-block w-2 h-2 rounded-full ${authDotClass}`}
-                    />
+                    <span className={`inline-block w-2 h-2 rounded-full ${authDotClass}`} />
                     <span className="text-gray-400">Auth: {authLabel}</span>
-                    {authStatus === "error" && !!authMessage && (
-                      <span className="text-red-400 truncate">
-                        ({authMessage})
-                      </span>
-                    )}
+                    {authStatus === "error" && !!authMessage && <span className="text-red-400 truncate">({authMessage})</span>}
                   </div>
-                </div>
+                </div> */}
               </div>
 
               <div>
