@@ -1,7 +1,13 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Clock } from "lucide-react";
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { Clock, Activity, ShieldCheck, Wallet as WalletIcon } from "lucide-react";
 import LeaderboardCombinedChart, { LBPlayer } from "@/components/Leaderboard";
 import NavBar from "@/components/Navbar";
 import BetsTable from "@/components/HistoryTable";
@@ -50,7 +56,46 @@ import {
 } from "@/lib/utils";
 import { webSocketService, type WsStatus } from "@/lib/websocket";
 
+/* -------------------------------------------------
+   Small presentational helpers for a "premium" look
+--------------------------------------------------*/
+
+// Frosted / glass card with soft ring + subtle glow
+function GlassCard({
+  className = "",
+  children,
+}: {
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={
+        "relative rounded-2xl bg-white/[0.03] backdrop-blur-xl ring-1 ring-white/10 shadow-[0_30px_120px_-20px_rgba(0,0,0,0.8)] " +
+        className
+      }
+    >
+      {children}
+    </div>
+  );
+}
+
+// Soft background FX (radial brand glows + faint grid sheen)
+function BackgroundFX() {
+  return (
+    <>
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(251,191,36,0.10)_0%,rgba(0,0,0,0)_60%)]" />
+      <div className="pointer-events-none fixed inset-0 mix-blend-screen bg-[radial-gradient(circle_at_80%_20%,rgba(16,185,129,0.07)_0%,rgba(0,0,0,0)_60%)]" />
+      <div className="pointer-events-none fixed inset-0 opacity-[0.07] [mask-image:radial-gradient(circle_at_center,black,transparent_70%)] bg-[repeating-conic-gradient(from_0deg,rgba(255,255,255,0.04)_0deg,rgba(255,255,255,0.04)_2deg,transparent_2deg,transparent_4deg)]" />
+    </>
+  );
+}
+
 export default function PredictionMarketUI() {
+  // ---------------------------------------------
+  // DATA / STATE (unchanged logic)
+  // ---------------------------------------------
+
   const markets = [
     { id: 0, name: "BTC/USD", icon: "₿", priceId: canonId(PYTH_IDS.BTCUSD) },
     { id: 1, name: "ETH/USD", icon: "Ξ", priceId: canonId(PYTH_IDS.ETHUSD) },
@@ -70,7 +115,7 @@ export default function PredictionMarketUI() {
   const formatAddress = (a: Address) => `${a.slice(0, 6)}...${a.slice(-4)}`;
 
   const [wsStatus, setWsStatus] = useState<WsStatus>("Disconnected");
-  const [ledgerBalances, setLedgerBalances] = useState(null);
+  const [ledgerBalances, setLedgerBalances] = useState<any>(null);
   const [isLoadingBalances, setIsLoadingBalances] = useState(false);
   const [selectedMarket, setSelectedMarket] = useState(0);
 
@@ -188,6 +233,7 @@ export default function PredictionMarketUI() {
   });
   const [settleCounter, setSettleCounter] = useState(0);
 
+  // reset state when switching markets
   useEffect(() => {
     setPriceHistory([0]);
     latestPriceRef.current = 0;
@@ -206,13 +252,17 @@ export default function PredictionMarketUI() {
     setSettleCounter(0);
   }, [selectedMarket]);
 
+  // interval tick for round resolution
   useEffect(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
     intervalRef.current = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
           const now = Date.now();
-          if (now - lastRevealAtRef.current < REVEAL_EVERY_SECONDS * 1000 - 50)
+          if (
+            now - lastRevealAtRef.current <
+            REVEAL_EVERY_SECONDS * 1000 - 50
+          )
             return REVEAL_EVERY_SECONDS;
           lastRevealAtRef.current = now;
           const spot = latestPriceRef.current || 0;
@@ -227,7 +277,10 @@ export default function PredictionMarketUI() {
           const snapshot = roundsRef.current[i];
           let nextUserBalance = userBalanceRef.current;
           if (snapshot && !snapshot.settled) {
-            const totalPool = snapshot.buckets.reduce((s, b) => s + b.bets, 0);
+            const totalPool = snapshot.buckets.reduce(
+              (s, b) => s + b.bets,
+              0
+            );
             const winnerPool = snapshot.buckets[winningBucket].bets;
             const userBetBucket = snapshot.buckets.find(
               (b) => b.userBet != null
@@ -255,9 +308,13 @@ export default function PredictionMarketUI() {
                       : 0,
                   profit:
                     userBetBucket.id === winningBucket
-                      ? totalPool * (stake / winnerPool) - stake
+                      ? totalPool * (stake / winnerPool) -
+                        stake
                       : -stake,
-                  result: userBetBucket.id === winningBucket ? "win" : "lose",
+                  result:
+                    userBetBucket.id === winningBucket
+                      ? "win"
+                      : "lose",
                   price: spot,
                   changePct,
                 },
@@ -294,7 +351,9 @@ export default function PredictionMarketUI() {
           othersPnlRef.current.nexus += drift();
           const pendingAfter = getPendingStakeTotal(nextRounds);
           const youPnlExact =
-            nextUserBalance + pendingAfter - initialBalanceRef.current;
+            nextUserBalance +
+            pendingAfter -
+            initialBalanceRef.current;
           setLatestLeaderProfits({
             alpha: +othersPnlRef.current.alpha,
             blaze: +othersPnlRef.current.blaze,
@@ -335,7 +394,11 @@ export default function PredictionMarketUI() {
       const round = updated[roundIndex];
       const buckets = round.buckets.map((b) =>
         b.id === bucketId
-          ? { ...b, userBet: (b.userBet ?? 0) + amt, bets: b.bets + amt }
+          ? {
+              ...b,
+              userBet: (b.userBet ?? 0) + amt,
+              bets: b.bets + amt,
+            }
           : b
       );
       updated[roundIndex] = { ...round, buckets };
@@ -366,9 +429,13 @@ export default function PredictionMarketUI() {
       .filter(({ r }) => !r.settled && r.buckets.some((b) => b.userBet != null))
       .map(({ r }) => {
         const b = r.buckets.find((bb) => bb.userBet != null)!;
-        const totalPool = r.buckets.reduce((s, bb) => s + bb.bets, 0);
+        const totalPool = r.buckets.reduce(
+          (s, bb) => s + bb.bets,
+          0
+        );
         const winnerPool = r.buckets[b.id].bets;
-        const estPayout = totalPool * ((b.userBet ?? 0) / (winnerPool || 1));
+        const estPayout =
+          totalPool * ((b.userBet ?? 0) / (winnerPool || 1));
         return {
           roundId: r.id,
           label: r.buckets[b.id].label,
@@ -379,6 +446,7 @@ export default function PredictionMarketUI() {
       });
   }, [rounds]);
 
+  // session + ws lifecycle
   useEffect(() => {
     const existingSessionKey = getStoredSessionKey();
     if (existingSessionKey) setSessionKey(existingSessionKey);
@@ -419,11 +487,14 @@ export default function PredictionMarketUI() {
   const lastAuthKeyRef = useRef<string | null>(null);
   const balancesKeyRef = useRef<string | null>(null);
 
+  // auth over ws
   useEffect(() => {
     if (wsStatus !== "Connected") return;
     if (!account || !walletClient || !sessionKey) return;
     if (isAuthenticatedRef.current || authInFlightRef.current) return;
-    const expire = String(Math.floor(Date.now() / 1000) + SESSION_DURATION);
+    const expire = String(
+      Math.floor(Date.now() / 1000) + SESSION_DURATION
+    );
     const authKey = `${account}:${sessionKey.address}:${expire}`;
     if (lastAuthKeyRef.current === authKey) return;
     lastAuthKeyRef.current = authKey;
@@ -451,6 +522,7 @@ export default function PredictionMarketUI() {
       });
   }, [wsStatus, account, walletClient, sessionKey]);
 
+  // ws message listener
   useEffect(() => {
     const handleMessage = async (data: any) => {
       let response: any;
@@ -458,7 +530,10 @@ export default function PredictionMarketUI() {
         response = parseAnyRPCResponse(JSON.stringify(data));
       } catch {
         if (data?.method === "toast" && data?.params?.message)
-          setToast({ type: "info", message: String(data.params.message) });
+          setToast({
+            type: "info",
+            message: String(data.params.message),
+          });
         return;
       }
       switch (response.method) {
@@ -503,21 +578,28 @@ export default function PredictionMarketUI() {
         case RPCMethod.AuthVerify: {
           if (response.params?.success) {
             setIsAuthenticated(true);
-            if (response.params.jwtToken) storeJWT(response.params.jwtToken);
+            if (response.params.jwtToken)
+              storeJWT(response.params.jwtToken);
             setAuthStatus("success");
             setAuthMessage("");
-            setToast({ type: "info", message: "Authentication successful!" });
+            setToast({
+              type: "info",
+              message: "Authentication successful!",
+            });
           } else {
             setIsAuthenticated(false);
             setAuthStatus("error");
-            setAuthMessage(response.params?.error ?? "Auth failed");
+            setAuthMessage(
+              response.params?.error ?? "Auth failed"
+            );
           }
           authInFlightRef.current = false;
           sentVerifyRef.current = false;
           break;
         }
         case RPCMethod.Error: {
-          const errMsg = response.params?.error ?? "Unknown error";
+          const errMsg =
+            response.params?.error ?? "Unknown error";
           console.error("[ws] error response:", errMsg);
           if (!isAuthenticatedRef.current) {
             removeJWT();
@@ -532,16 +614,19 @@ export default function PredictionMarketUI() {
         }
         case RPCMethod.GetLedgerBalances: {
           const list =
-            (response as GetLedgerBalancesResponse).params?.ledgerBalances ??
-            [];
-          const map = Object.fromEntries(list.map((b) => [b.asset, b.amount]));
+            (response as GetLedgerBalancesResponse).params
+              ?.ledgerBalances ?? [];
+          const map = Object.fromEntries(
+            list.map((b) => [b.asset, b.amount])
+          );
           setLedgerBalances(map);
           setIsLoadingBalances(false);
           break;
         }
         case RPCMethod.BalanceUpdate: {
           const list =
-            (response as BalanceUpdateResponse).params?.balanceUpdates ?? [];
+            (response as BalanceUpdateResponse).params
+              ?.balanceUpdates ?? [];
           setLedgerBalances((prev) => {
             const base = { ...(prev ?? {}) };
             for (const b of list) base[b.asset] = b.amount;
@@ -550,7 +635,10 @@ export default function PredictionMarketUI() {
           break;
         }
         default: {
-          if (response?.method === "toast" && response?.params?.message)
+          if (
+            response?.method === "toast" &&
+            response?.params?.message
+          )
             setToast({
               type: "info",
               message: String(response.params.message),
@@ -559,9 +647,11 @@ export default function PredictionMarketUI() {
       }
     };
     webSocketService.addMessageListener(handleMessage);
-    return () => webSocketService.removeMessageListener(handleMessage);
+    return () =>
+      webSocketService.removeMessageListener(handleMessage);
   }, []);
 
+  // fetch balances once authenticated
   useEffect(() => {
     if (!isAuthenticated || !sessionKey || !account) return;
     const key = `${account}:${sessionKey.address}`;
@@ -569,7 +659,9 @@ export default function PredictionMarketUI() {
     balancesKeyRef.current = key;
     setIsLoadingBalances(true);
     try {
-      const signer = createECDSAMessageSigner(sessionKey.privateKey);
+      const signer = createECDSAMessageSigner(
+        sessionKey.privateKey
+      );
       createGetLedgerBalancesMessage(signer, account)
         .then((payload) => webSocketService.send(payload))
         .catch((err) => {
@@ -582,6 +674,7 @@ export default function PredictionMarketUI() {
     }
   }, [isAuthenticated, sessionKey, account]);
 
+  // subscribe to market feed
   useEffect(() => {
     if (wsStatus !== "Connected") return;
     webSocketService.send("market/subscribe", {
@@ -590,11 +683,15 @@ export default function PredictionMarketUI() {
     });
   }, [wsStatus, selectedPriceId, selectedMarket]);
 
+  // notify server wallet connected
   useEffect(() => {
     if (account && wsStatus === "Connected")
-      webSocketService.send("wallet/connected", { address: account });
+      webSocketService.send("wallet/connected", {
+        address: account,
+      });
   }, [account, wsStatus]);
 
+  // reset auth UI when disconnected wallet
   useEffect(() => {
     if (!account) {
       setIsAuthenticated(false);
@@ -609,24 +706,34 @@ export default function PredictionMarketUI() {
     }
   }, [account]);
 
+  // gentle "connect wallet" toast
   useEffect(() => {
     if (!isWalletConnected) {
       setToast((prev) =>
-        prev?.message === "Connect your wallet to place bets."
+        prev?.message ===
+        "Connect your wallet to place bets."
           ? prev
-          : { type: "info", message: "Connect your wallet to place bets." }
+          : {
+              type: "info",
+              message:
+                "Connect your wallet to place bets.",
+            }
       );
     }
   }, [isWalletConnected]);
 
-  const authDotClass =
+  // prettier status dot (adds glow)
+  const authBaseDotClass =
     authStatus === "success"
-      ? "bg-green-500"
+      ? "bg-emerald-400"
       : authStatus === "pending"
-      ? "bg-yellow-400"
+      ? "bg-amber-400"
       : authStatus === "error"
       ? "bg-red-500"
       : "bg-gray-500";
+  const authDotClass =
+    authBaseDotClass + " shadow-[0_0_8px_currentColor]";
+
   const authLabel =
     authStatus === "success"
       ? "OK"
@@ -636,110 +743,158 @@ export default function PredictionMarketUI() {
       ? "Failed"
       : "Idle";
 
+  // ---------------------------------------------
+  // RENDER
+  // ---------------------------------------------
+
   return (
-    <div className="min-h-screen bg-black text-gray-100">
-      <NavBar />
-      <div className="border-b border-gray-800/50 bg-gray-900/20">
+    <div className="relative min-h-screen bg-black text-zinc-100 antialiased selection:bg-amber-400/20 selection:text-amber-200">
+      <BackgroundFX />
+
+      {/* Top nav (your existing NavBar component) */}
+      {/* <NavBar /> */}
+
+      {/* Market bar / status bar */}
+      <div className="border-b border-white/5 bg-black/40 backdrop-blur-xl ring-1 ring-white/10 relative z-30">
         <div className="max-w-9xl mx-auto px-6">
-          <div className="flex items-center justify-between gap-4 py-2">
-            <div className="flex gap-1">
-              {markets.map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => setSelectedMarket(m.id)}
-                  className={`px-6 py-3 text-sm font-medium transition relative ${
-                    selectedMarket === m.id
-                      ? "text-amber-400"
-                      : "text-gray-400 hover:text-gray-200"
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="text-lg">{m.icon}</span>
-                    <span>{m.name}</span>
-                    <span className="text-xs text-gray-500 font-mono">
+          <div className="flex items-start md:items-center justify-between gap-4 py-3 flex-col md:flex-row">
+            {/* Market selector */}
+            <div className="flex flex-wrap gap-2">
+              {markets.map((m) => {
+                const active = selectedMarket === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    onClick={() => setSelectedMarket(m.id)}
+                    className={`relative flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition
+                    ring-1 ring-white/10 shadow-[0_20px_60px_-10px_rgba(0,0,0,0.8)]
+                    ${
+                      active
+                        ? "bg-gradient-to-br from-amber-400/15 via-amber-400/5 to-transparent text-amber-300 ring-amber-400/40 shadow-[0_30px_120px_-10px_rgba(251,191,36,0.4)]"
+                        : "bg-white/[0.02] text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.04]"
+                    }`}
+                  >
+                    <span className="text-lg leading-none">
+                      {m.icon}
+                    </span>
+                    <span className="text-zinc-200 font-semibold">
+                      {m.name}
+                    </span>
+                    <span className="text-[11px] text-zinc-500 font-mono">
                       {typeof pythPrices[m.priceId] === "number"
-                        ? `$${pythPrices[m.priceId].toLocaleString(undefined, {
+                        ? `$${pythPrices[
+                            m.priceId
+                          ].toLocaleString(undefined, {
                             minimumFractionDigits: 2,
                             maximumFractionDigits: 2,
                           })}`
                         : "—"}
                     </span>
-                  </div>
-                  {selectedMarket === m.id && (
-                    <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber-500" />
-                  )}
-                </button>
-              ))}
+
+                    {active && (
+                      <span className="absolute -bottom-px left-2 right-2 h-[2px] bg-gradient-to-r from-transparent via-amber-400 to-transparent rounded-full" />
+                    )}
+                  </button>
+                );
+              })}
             </div>
-            <div className="flex items-center gap-6 text-xs text-gray-400">
-              <div className="flex items-center gap-2">
+
+            {/* Status + toggle */}
+            <div className="flex flex-wrap items-center gap-3 text-[11px] font-medium text-zinc-400">
+              {/* realtime status */}
+              <div className="flex items-center gap-2 rounded-full bg-white/[0.03] px-3 py-1.5 ring-1 ring-white/10 shadow-[0_8px_30px_rgba(0,0,0,0.8)]">
                 <span
                   className={`inline-block w-2 h-2 rounded-full ${
                     wsStatus === "Connected"
-                      ? "bg-green-500"
+                      ? "bg-emerald-400"
                       : wsStatus === "Connecting"
-                      ? "bg-yellow-400"
-                      : "bg-gray-500"
-                  }`}
+                      ? "bg-amber-400"
+                      : "bg-zinc-600"
+                  } shadow-[0_0_8px_currentColor]`}
                 />
-                <span>Realtime: {wsStatus}</span>
-                {wsStatus === "Disconnected" && (
-                  <button
-                    onClick={() => webSocketService.connect()}
-                    className="ml-2 underline hover:text-gray-200"
-                  >
-                    Reconnect
-                  </button>
-                )}
+                <div className="flex items-center gap-1">
+                  <Activity className="w-3.5 h-3.5 text-zinc-400" />
+                  <span>Realtime: {wsStatus}</span>
+                  {wsStatus === "Disconnected" && (
+                    <button
+                      onClick={() => webSocketService.connect()}
+                      className="ml-1 underline text-amber-400 hover:text-amber-300"
+                    >
+                      Reconnect
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="flex items-center gap-2">
+
+              {/* auth status */}
+              <div className="flex items-center gap-2 rounded-full bg-white/[0.03] px-3 py-1.5 ring-1 ring-white/10 shadow-[0_8px_30px_rgba(0,0,0,0.8)]">
                 <span
                   className={`inline-block w-2 h-2 rounded-full ${authDotClass}`}
                 />
-                <span>Auth: {authLabel}</span>
-                {authStatus === "error" && authMessage && (
-                  <span className="text-red-400 ml-1 max-w-[200px] truncate">
-                    ({authMessage})
-                  </span>
-                )}
+                <div className="flex items-center gap-1">
+                  <ShieldCheck className="w-3.5 h-3.5 text-zinc-400" />
+                  <span>Auth: {authLabel}</span>
+                  {authStatus === "error" && authMessage && (
+                    <span className="text-red-400 ml-1 max-w-[200px] truncate">
+                      ({authMessage})
+                    </span>
+                  )}
+                </div>
               </div>
-              <MarketViewToggle mode={viewMode} onChange={setViewMode} />
+
+              {/* mode toggle pill */}
+              <div className="rounded-full bg-white/[0.03] px-2 py-1 ring-1 ring-white/10 shadow-[0_8px_30px_rgba(0,0,0,0.8)]">
+                <MarketViewToggle
+                  mode={viewMode}
+                  onChange={setViewMode}
+                />
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="max-w-9xl mx-auto px-6 py-8">
-        <div className="flex gap-6">
-          <div className="flex-1">
+      {/* MAIN CONTENT */}
+      <div className="relative max-w-9xl mx-auto px-6 py-8">
+        <div className="flex flex-col lg:flex-row gap-6">
+          {/* LEFT COLUMN: chart / grid / leaderboard */}
+          <div className="flex-1 min-w-0">
+            {/* betting / order-book style board */}
             <div className={viewMode === "betting" ? "block" : "hidden"}>
-              <div className="bg-gray-900/30 border border-gray-800/50 rounded-xl overflow-hidden">
-                <div className="grid grid-cols-13 border-b border-gray-800/50 bg-black/20">
-                  <div className="col-span-1 p-3 text-xs font-medium text-gray-500 border-r border-gray-800/50">
+              <GlassCard className="overflow-hidden">
+                {/* header row with rounds */}
+                <div className="grid grid-cols-13 border-b border-white/5 bg-black/20">
+                  <div className="col-span-1 p-3 text-[11px] font-semibold text-zinc-500 uppercase tracking-wide ring-1 ring-white/[0.03] bg-white/[0.02]">
                     Round
                   </div>
                   {rounds.map((round, idx) => (
                     <div
                       key={round.id}
-                      className={`p-3 text-center text-xs border-r border-gray-800/50 last:border-r-0 relative ${
-                        idx === CURRENT_COL ? "bg-amber-500/5" : ""
+                      className={`p-3 text-center text-[11px] border-r border-white/5 last:border-r-0 relative ${
+                        idx === CURRENT_COL
+                          ? "bg-amber-500/5"
+                          : ""
                       }`}
                     >
-                      <div className="font-mono font-semibold">#{round.id}</div>
+                      <div className="font-mono font-semibold text-zinc-200">
+                        #{round.id}
+                      </div>
                       {idx === CURRENT_COL && (
                         <div className="text-amber-400 font-medium mt-1 flex items-center justify-center gap-1 animate-pulse">
                           <Clock className="w-3 h-3" /> {timeLeft}s
                         </div>
                       )}
                       {idx === CURRENT_COL && (
-                        <div className="absolute inset-x-0 -bottom-px h-0.5 bg-gradient-to-r from-transparent via-amber-500 to-transparent" />
+                        <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-amber-400 to-transparent" />
                       )}
                     </div>
                   ))}
                 </div>
 
+                {/* main prediction grid */}
                 <div className="relative">
-                  <div className="absolute left-0 top-0 bottom-0 w-23 border-r border-gray-800/50 bg-black/20 z-10">
+                  {/* left labels ("Strong Bull", etc.) */}
+                  <div className="absolute left-0 top-0 bottom-0 w-23 border-r border-white/5 bg-black/30 backdrop-blur-sm z-10">
                     {[
                       { id: 0, label: "Strong Bull" },
                       { id: 1, label: "Bull" },
@@ -752,12 +907,14 @@ export default function PredictionMarketUI() {
                       return (
                         <div
                           key={bucket.id}
-                          className="h-32 flex items-center px-3 border-b border-gray-800/50 last:border-b-0"
+                          className="h-32 flex items-center px-3 border-b border-white/5 last:border-b-0"
                         >
                           <div
-                            className={`font-semibold ${
-                              isBull ? "text-emerald-400" : "text-red-400"
-                            } text-base`}
+                            className={`font-semibold text-base ${
+                              isBull
+                                ? "text-emerald-400"
+                                : "text-red-400"
+                            }`}
                           >
                             {bucket.label}
                           </div>
@@ -766,6 +923,7 @@ export default function PredictionMarketUI() {
                     })}
                   </div>
 
+                  {/* rounds grid */}
                   <div
                     className="ml-23 grid grid-cols-12 relative"
                     style={{ height: "512px" }}
@@ -773,23 +931,27 @@ export default function PredictionMarketUI() {
                     {rounds.map((round, roundIdx) => {
                       const isGraphSide = roundIdx < GRAPH_COLS;
                       const isCurrent = roundIdx === CURRENT_COL;
-                      const isPastOrCurrent = roundIdx <= CURRENT_COL;
+                      const isPastOrCurrent =
+                        roundIdx <= CURRENT_COL;
+
                       return (
                         <div
                           key={round.id}
                           className={`relative group ${
                             isGraphSide
                               ? ""
-                              : "border-r border-gray-800/50 last:border-r-0"
+                              : "border-r border-white/5 last:border-r-0"
                           }`}
                         >
                           {isGraphSide ? (
+                            /* historical / live path viz */
                             <div className="h-full relative">
                               {round.revealed &&
-                                typeof round.winningBucket === "number" && (
+                                typeof round.winningBucket ===
+                                  "number" && (
                                   <>
                                     <div
-                                      className="absolute left-0 right-0 h-px bg-gray-800"
+                                      className="absolute left-0 right-0 h-px bg-white/10"
                                       style={{ top: "50%" }}
                                     />
                                     <svg
@@ -807,16 +969,18 @@ export default function PredictionMarketUI() {
                                         >
                                           <stop
                                             offset="0%"
-                                            stopColor={"yellow"}
+                                            stopColor="#fbbf24"
                                             stopOpacity="0.15"
                                           />
                                           <stop
                                             offset="100%"
-                                            stopColor={"yellow"}
+                                            stopColor="#fbbf24"
                                             stopOpacity="0.05"
                                           />
                                         </linearGradient>
                                       </defs>
+
+                                      {/* golden wedge toward winning bucket */}
                                       <polygon
                                         points={`0,50 50,${bucketCenterY(
                                           round.winningBucket
@@ -828,7 +992,7 @@ export default function PredictionMarketUI() {
                                           round.winningBucket
                                         )} 100,50`}
                                         fill="none"
-                                        stroke={"yellow"}
+                                        stroke="#fbbf24"
                                         strokeWidth="1.5"
                                         vectorEffect="non-scaling-stroke"
                                         opacity="0.6"
@@ -838,15 +1002,18 @@ export default function PredictionMarketUI() {
                                           cx="100"
                                           cy="50"
                                           r="3"
-                                          fill="yellow"
+                                          fill="#fbbf24"
                                           style={{
                                             filter:
-                                              "drop-shadow(0 0 4px rgba(255, 255, 0, 0.8))",
+                                              "drop-shadow(0 0 4px rgba(251,191,36,0.8))",
                                           }}
                                         />
                                       )}
                                     </svg>
-                                    {typeof round.changePct === "number" && (
+
+                                    {/* hover readout */}
+                                    {typeof round.changePct ===
+                                      "number" && (
                                       <div
                                         className="absolute left-0 right-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                                         style={{
@@ -857,24 +1024,34 @@ export default function PredictionMarketUI() {
                                         }}
                                       >
                                         <div
-                                          className={`${
+                                          className={`backdrop-blur-sm border rounded px-2 py-1 text-[11px] font-mono ring-1 ${
                                             round.changePct >= 0
-                                              ? "bg-emerald-500/10 border-emerald-500/30"
-                                              : "bg-red-500/10 border-red-500/30"
-                                          } border rounded px-2 py-1 text-xs font-mono backdrop-blur-sm`}
+                                              ? "bg-emerald-500/10 border-emerald-500/30 ring-emerald-500/20"
+                                              : "bg-red-500/10 border-red-500/30 ring-red-500/20"
+                                          }`}
                                         >
                                           <span
                                             className={
-                                              round.changePct >= 0
+                                              round.changePct >=
+                                              0
                                                 ? "text-emerald-400"
                                                 : "text-red-400"
                                             }
                                           >
-                                            {round.changePct >= 0 ? "+" : ""}
-                                            {round.changePct.toFixed(4)}%
+                                            {round.changePct >=
+                                            0
+                                              ? "+"
+                                              : ""}
+                                            {round.changePct.toFixed(
+                                              4
+                                            )}
+                                            %
                                           </span>
-                                          <span className="text-gray-400 ml-2">
-                                            ${formatUSD(round.price as number)}
+                                          <span className="text-zinc-400 ml-2">
+                                            $
+                                            {formatUSD(
+                                              round.price as number
+                                            )}
                                           </span>
                                         </div>
                                       </div>
@@ -883,35 +1060,53 @@ export default function PredictionMarketUI() {
                                 )}
                             </div>
                           ) : (
+                            /* future bettable buckets */
                             <div className="h-full grid grid-rows-4">
                               {[0, 1, 2, 3].map((bucketId) => {
-                                const cell = round.buckets[bucketId];
-                                const hasBet = cell.userBet != null;
+                                const cell =
+                                  round.buckets[bucketId];
+                                const hasBet =
+                                  cell.userBet != null;
                                 const disabled =
-                                  isPastOrCurrent || !isWalletConnected;
+                                  isPastOrCurrent ||
+                                  !isWalletConnected;
+
                                 return (
                                   <button
                                     key={bucketId}
                                     onClick={() =>
-                                      handleBet(roundIdx, bucketId)
+                                      handleBet(
+                                        roundIdx,
+                                        bucketId
+                                      )
                                     }
                                     disabled={disabled}
-                                    className={`border-b border-gray-800/50 last:border-b-0 transition p-3 ${
-                                      hasBet
-                                        ? "bg-amber-500/10 border-l-2 border-l-amber-500"
-                                        : "hover:bg-amber-500/10"
-                                    } ${
-                                      disabled
-                                        ? "opacity-50 cursor-not-allowed"
-                                        : ""
-                                    }`}
+                                    className={`border-b border-white/5 last:border-b-0 transition p-3 text-left
+                                      ${
+                                        hasBet
+                                          ? "bg-amber-500/10 ring-1 ring-amber-400/40"
+                                          : "hover:bg-amber-500/5 hover:ring-1 hover:ring-amber-400/20"
+                                      }
+                                      ${
+                                        disabled
+                                          ? "opacity-40 cursor-not-allowed"
+                                          : "cursor-pointer"
+                                      }`}
                                   >
-                                    <div className="text-xs font-mono font-semibold text-gray-400">
-                                      ${formatUSD(Number(cell.bets))}
+                                    <div className="text-[11px] font-mono font-semibold text-zinc-300">
+                                      $
+                                      {formatUSD(
+                                        Number(
+                                          cell.bets
+                                        )
+                                      )}
                                     </div>
                                     {hasBet && (
-                                      <div className="text-xs text-amber-400 font-medium mt-1">
-                                        You: ${formatUSD(cell.userBet!)}
+                                      <div className="text-[11px] text-amber-300 font-medium mt-1">
+                                        You: $
+                                        {formatUSD(
+                                          cell.userBet!
+                                        )}
                                       </div>
                                     )}
                                   </button>
@@ -919,24 +1114,26 @@ export default function PredictionMarketUI() {
                               })}
                             </div>
                           )}
+
                           {isCurrent && (
-                            <div className="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 bg-gradient-to-r from-amber-400 via-amber-500 " />
+                            <div className="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 bg-gradient-to-r from-amber-300 via-amber-400" />
                           )}
+
                           {roundIdx === GRAPH_COLS - 1 && (
                             <>
                               <div
-                                className="pointer-events-none absolute right-0 top-0 bottom-0 w-[2px] bg-yellow-400"
+                                className="pointer-events-none absolute right-0 top-0 bottom-0 w-[2px] bg-amber-400"
                                 style={{
                                   filter:
-                                    "drop-shadow(0 0 6px rgba(255,255,0,0.7))",
+                                    "drop-shadow(0 0 6px rgba(251,191,36,0.7))",
                                   zIndex: 50,
                                 }}
                               />
                               <div
-                                className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 h-3 w-3 rounded-full bg-yellow-400"
+                                className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 h-3 w-3 rounded-full bg-amber-400"
                                 style={{
                                   filter:
-                                    "drop-shadow(0 0 8px rgba(255,255,0,0.9))",
+                                    "drop-shadow(0 0 8px rgba(251,191,36,0.9))",
                                   zIndex: 60,
                                 }}
                               />
@@ -947,242 +1144,298 @@ export default function PredictionMarketUI() {
                     })}
                   </div>
                 </div>
-              </div>
+              </GlassCard>
             </div>
 
+            {/* leaderboard / pnl race */}
             <div className={viewMode === "leaderboard" ? "block" : "hidden"}>
-              <LeaderboardCombinedChart
-                players={leaderboardPlayers}
-                latestProfits={latestLeaderProfits}
-                settleSignal={settleCounter}
-                roundProgress={roundProgress}
-                points={64}
-                ema={0.85}
-                height={420}
-                stepIds={["you"]}
-                tweenOthers={true}
-                tweenMs={700}
-                persistKey={`lb-pnl-${selectedMarket}`}
-              />
+              <GlassCard className="p-4 lg:p-6">
+                <LeaderboardCombinedChart
+                  players={leaderboardPlayers}
+                  latestProfits={latestLeaderProfits}
+                  settleSignal={settleCounter}
+                  roundProgress={roundProgress}
+                  points={64}
+                  ema={0.85}
+                  height={420}
+                  stepIds={["you"]}
+                  tweenOthers={true}
+                  tweenMs={700}
+                  persistKey={`lb-pnl-${selectedMarket}`}
+                />
+              </GlassCard>
             </div>
           </div>
 
-          <aside className="w-full md:w-80 shrink-0">
-            <div className="bg-gray-900/30 border border-gray-800/50 rounded-xl p-4 sticky top-6">
-              <h3 className="text-sm font-semibold text-gray-200 mb-3">
-                Bet Panel
-              </h3>
+          {/* RIGHT COLUMN: bet panel */}
+          <aside className="w-full lg:w-80 shrink-0">
+            <div className="sticky top-6">
+              <GlassCard className="p-5 space-y-6">
+                {/* Panel Header */}
+                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)]" />
+                  Bet Panel
+                </h3>
 
-              <div className="mb-6 p-4 bg-gray-800/50 rounded-lg border border-gray-700/50">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-gray-200">
-                    Wallet
-                  </span>
-                  {account && (
-                    <span className="text-xs text-gray-400 font-mono">
-                      {formatAddress(account as Address)}
+                {/* Wallet / auth box */}
+                <div className="p-4 rounded-xl bg-black/40 ring-1 ring-white/10 shadow-inner shadow-black/40">
+                  <div className="flex items-start justify-between mb-3">
+                    <span className="text-sm font-medium text-zinc-200 flex items-center gap-1.5">
+                      <WalletIcon className="w-4 h-4 text-amber-400" />
+                      Wallet
                     </span>
+                    {account && (
+                      <span className="text-[11px] text-zinc-500 font-mono">
+                        {formatAddress(account as Address)}
+                      </span>
+                    )}
+                  </div>
+
+                  {!isWalletConnected || !isAuthenticated ? (
+                    <button
+                      onClick={connectWallet}
+                      disabled={isConnecting}
+                      className="w-full rounded-lg text-[13px] font-semibold leading-none text-black shadow-[0_20px_60px_-10px_rgba(251,191,36,0.6)]
+                      bg-gradient-to-r from-amber-400 via-amber-300 to-yellow-500 hover:via-amber-400 hover:to-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-400/60 focus:ring-offset-0"
+                    >
+                      <div className="px-3 py-2">
+                        {!isWalletConnected
+                          ? "Connect Wallet"
+                          : !isAuthenticated
+                          ? "Authenticating..."
+                          : "Support"}
+                      </div>
+                    </button>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={disconnect}
+                        className="w-full rounded-lg bg-white/[0.04] hover:bg-white/[0.07] text-white text-[13px] font-medium leading-none ring-1 ring-white/10 px-3 py-2 shadow-[0_20px_60px_-10px_rgba(0,0,0,0.8)]"
+                      >
+                        Disconnect
+                      </button>
+                    </div>
+                  )}
+
+                  {error && (
+                    <div className="mt-3 text-[11px] rounded-lg bg-red-950/40 ring-1 ring-red-700/40 text-red-300 p-2">
+                      {error}
+                      <button
+                        onClick={() => setError(null)}
+                        className="ml-2 text-red-400 hover:text-red-300"
+                      >
+                        ×
+                      </button>
+                    </div>
                   )}
                 </div>
 
-                {!isWalletConnected || !isAuthenticated ? (
-                  <button
-                    onClick={connectWallet}
-                    disabled={isConnecting}
-                    className="w-full bg-yellow-500 hover:bg-yellow-600 text-black px-3 py-2 rounded text-sm font-medium disabled:opacity-50"
-                  >
-                    {!isWalletConnected
-                      ? "Connect Wallet"
-                      : !isAuthenticated
-                      ? "Authenticating..."
-                      : "Support"}
-                  </button>
-                ) : (
+                {/* Quick amounts */}
+                <div>
+                  <div className="text-[11px] text-zinc-500 mb-2 font-medium uppercase tracking-wide">
+                    Quick Amounts
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {QUICK_BETS.map((amt) => (
+                      <button
+                        key={amt}
+                        onClick={() => setBetAmount(amt)}
+                        className={`px-3 py-1.5 rounded-lg text-[12px] font-mono font-medium transition
+                        ring-1 shadow-[0_20px_60px_-10px_rgba(0,0,0,0.8)]
+                        ${
+                          betAmount === amt
+                            ? "bg-amber-500/10 text-amber-300 ring-amber-400/40 shadow-[0_30px_120px_-10px_rgba(251,191,36,0.4)]"
+                            : "bg-white/[0.03] text-zinc-300 ring-white/10 hover:bg-white/[0.06]"
+                        }`}
+                      >
+                        ${amt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Custom amount */}
+                <div>
+                  <div className="text-[11px] text-zinc-500 mb-2 font-medium uppercase tracking-wide">
+                    Custom Amount (USD)
+                  </div>
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={disconnect}
-                      className="w-full bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded text-sm font-medium"
-                    >
-                      Disconnect
-                    </button>
+                    <input
+                      type="number"
+                      min={MIN_BET}
+                      step="0.25"
+                      value={betAmount}
+                      onChange={(e) => {
+                        const v = parseFloat(e.target.value);
+                        const clamped = Number.isFinite(v)
+                          ? Math.max(
+                              MIN_BET,
+                              Math.min(v, userBalance)
+                            )
+                          : MIN_BET;
+                        setBetAmount(
+                          fromCents(toCents(clamped))
+                        );
+                      }}
+                      className="w-full bg-black/40 rounded-lg px-3 py-2 text-sm font-mono text-zinc-100 placeholder-zinc-500 ring-1 ring-white/10 focus:outline-none focus:ring-2 focus:ring-amber-400/50"
+                    />
+                    <span className="text-[11px] text-zinc-500">
+                      USD
+                    </span>
                   </div>
-                )}
-
-                {error && (
-                  <div className="mt-2 p-2 bg-red-900/30 border border-red-700/50 rounded text-xs text-red-300">
-                    {error}
-                    <button
-                      onClick={() => setError(null)}
-                      className="ml-2 text-red-400 hover:text-red-300"
-                    >
-                      ×
-                    </button>
+                  <div className="text-[10px] text-zinc-500 mt-1">
+                    Click a future cell to place this amount.
                   </div>
-                )}
+                </div>
 
-                {/* <div className="mt-3 space-y-2 text-xs">
-                  <div className="flex items-center justify-between text-gray-400">
-                    <div className="flex items-center gap-2">
-                      <span className={`inline-block w-2 h-2 rounded-full ${wsStatus === "Connected" ? "bg-green-500" : wsStatus === "Connecting" ? "bg-yellow-400" : "bg-gray-500"}`} />
-                      <span>Realtime: {wsStatus}</span>
+                <div className="h-px bg-white/10" />
+
+                {/* Stats grid */}
+                <div className="grid grid-cols-2 gap-3 text-[11px]">
+                  {/* Balance tile */}
+                  <div className="bg-white/[0.02] rounded-xl ring-1 ring-white/10 p-3 shadow-[0_20px_60px_-10px_rgba(0,0,0,0.8)]">
+                    <div className="text-[10px] text-zinc-500 mb-1 font-medium uppercase tracking-wide">
+                      Balance
                     </div>
-                    {wsStatus === "Disconnected" && <button onClick={() => webSocketService.connect()} className="underline hover:text-gray-200">Reconnect</button>}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`inline-block w-2 h-2 rounded-full ${authDotClass}`} />
-                    <span className="text-gray-400">Auth: {authLabel}</span>
-                    {authStatus === "error" && !!authMessage && <span className="text-red-400 truncate">({authMessage})</span>}
-                  </div>
-                </div> */}
-              </div>
 
-              <div>
-                <div className="text-xs text-gray-500 mb-2">Quick Amounts</div>
-                <div className="flex flex-wrap gap-2">
-                  {QUICK_BETS.map((amt) => (
-                    <button
-                      key={amt}
-                      onClick={() => setBetAmount(amt)}
-                      className={`px-3 py-1.5 rounded border text-xs font-mono transition ${
-                        betAmount === amt
-                          ? "border-amber-400 text-amber-300 bg-amber-500/10"
-                          : "border-gray-700 hover:border-amber-500/40"
+                    {isAuthenticated ? (
+                      <>
+                        <div className="font-mono font-semibold text-zinc-100 text-sm leading-none">
+                          {isLoadingBalances
+                            ? "Loading..."
+                            : (() => {
+                                const usdcStr =
+                                  ledgerBalances?.["USDC"] ??
+                                  ledgerBalances?.[
+                                    "usdc"
+                                  ] ??
+                                  "0";
+                                const usdc =
+                                  Number.parseFloat(
+                                    usdcStr || "0"
+                                  );
+                                return `$${formatUSD(
+                                  Number.isFinite(usdc)
+                                    ? usdc
+                                    : 0
+                                )}`;
+                              })()}
+                        </div>
+                        <div className="text-[10px] text-zinc-500 mt-1">
+                          Nitrolite (USDC)
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="font-mono font-semibold text-zinc-100 text-sm leading-none">
+                          ${formatUSD(userBalance)}
+                        </div>
+                        <button
+                          onClick={() =>
+                            setUserBalance((b) => b + 10)
+                          }
+                          className="mt-2 text-[10px] text-amber-300 hover:text-amber-200 font-medium"
+                        >
+                          + Add $10 demo funds
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  {/* P/L tile */}
+                  <div className="bg-white/[0.02] rounded-xl ring-1 ring-white/10 p-3 shadow-[0_20px_60px_-10px_rgba(0,0,0,0.8)]">
+                    <div className="text-[10px] text-zinc-500 mb-1 font-medium uppercase tracking-wide">
+                      P/L
+                    </div>
+                    <div
+                      className={`font-mono font-semibold text-sm leading-none ${
+                        pnlDisplay >= 0
+                          ? "text-amber-300"
+                          : "text-red-400"
                       }`}
                     >
-                      ${amt}
-                    </button>
-                  ))}
-                </div>
-              </div>
+                      {pnlDisplay >= 0 ? "+" : "-"}$
+                      {formatUSD(Math.abs(pnlDisplay))}
+                    </div>
+                  </div>
 
-              <div className="mt-4">
-                <div className="text-xs text-gray-500 mb-2">
-                  Custom Amount (USD)
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min={MIN_BET}
-                    step="0.25"
-                    value={betAmount}
-                    onChange={(e) => {
-                      const v = parseFloat(e.target.value);
-                      const clamped = Number.isFinite(v)
-                        ? Math.max(MIN_BET, Math.min(v, userBalance))
-                        : MIN_BET;
-                      setBetAmount(fromCents(toCents(clamped)));
-                    }}
-                    className="w-full bg-black/30 border border-gray-700 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-amber-500/60"
-                  />
-                  <span className="text-xs text-gray-500">USD</span>
-                </div>
-                <div className="text-[11px] text-gray-500 mt-1">
-                  Click a future cell to place this amount.
-                </div>
-              </div>
+                  {/* Total Winnings */}
+                  <div className="bg-white/[0.02] rounded-xl ring-1 ring-white/10 p-3 shadow-[0_20px_60px_-10px_rgba(0,0,0,0.8)]">
+                    <div className="text-[10px] text-zinc-500 mb-1 font-medium uppercase tracking-wide">
+                      Total Winnings
+                    </div>
+                    <div className="font-mono font-semibold text-emerald-300 text-sm leading-none">
+                      ${formatUSD(totalWinnings)}
+                    </div>
+                  </div>
 
-              <div className="h-px bg-gray-800/60 my-4" />
+                  {/* Total Staked */}
+                  <div className="bg-white/[0.02] rounded-xl ring-1 ring-white/10 p-3 shadow-[0_20px_60px_-10px_rgba(0,0,0,0.8)]">
+                    <div className="text-[10px] text-zinc-500 mb-1 font-medium uppercase tracking-wide">
+                      Total Staked
+                    </div>
+                    <div className="font-mono font-semibold text-zinc-300 text-sm leading-none">
+                      ${formatUSD(totalStaked)}
+                    </div>
+                  </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-black/20 border border-gray-800 rounded p-3">
-                  <div className="text-[11px] text-gray-500 mb-1">Balance</div>
-                  {isAuthenticated ? (
-                    <>
-                      <div className="font-mono font-semibold">
-                        {isLoadingBalances
-                          ? "Loading..."
-                          : (() => {
-                              const usdcStr =
-                                ledgerBalances?.["USDC"] ??
-                                ledgerBalances?.["usdc"] ??
-                                "0";
-                              const usdc = Number.parseFloat(usdcStr || "0");
-                              return `$${formatUSD(
-                                Number.isFinite(usdc) ? usdc : 0
-                              )}`;
-                            })()}
-                      </div>
-                      <div className="text-[11px] text-gray-500 mt-1">
-                        Nitrolite (USDC)
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="font-mono font-semibold">
-                        ${formatUSD(userBalance)}
-                      </div>
-                      <button
-                        onClick={() => setUserBalance((b) => b + 10)}
-                        className="mt-2 text-[11px] underline text-amber-400 hover:text-amber-300"
-                      >
-                        + Add $10 demo funds
-                      </button>
-                    </>
-                  )}
-                </div>
+                  {/* Wins */}
+                  <div className="bg-white/[0.02] rounded-xl ring-1 ring-white/10 p-3 shadow-[0_20px_60px_-10px_rgba(0,0,0,0.8)]">
+                    <div className="text-[10px] text-zinc-500 mb-1 font-medium uppercase tracking-wide">
+                      Wins
+                    </div>
+                    <div className="font-mono font-semibold text-zinc-100 text-sm leading-none">
+                      {wins}
+                    </div>
+                  </div>
 
-                <div className="bg-black/20 border border-gray-800 rounded p-3">
-                  <div className="text-[11px] text-gray-500 mb-1">P/L</div>
-                  <div
-                    className={`font-mono font-semibold ${
-                      pnlDisplay >= 0 ? "text-amber-400" : "text-red-400"
-                    }`}
-                  >
-                    {pnlDisplay >= 0 ? "+" : "-"}$
-                    {formatUSD(Math.abs(pnlDisplay))}
+                  {/* Win Rate */}
+                  <div className="bg-white/[0.02] rounded-xl ring-1 ring-white/10 p-3 shadow-[0_20px_60px_-10px_rgba(0,0,0,0.8)]">
+                    <div className="text-[10px] text-zinc-500 mb-1 font-medium uppercase tracking-wide">
+                      Win Rate
+                    </div>
+                    <div className="font-mono font-semibold text-zinc-100 text-sm leading-none">
+                      {completedBets
+                        ? `${winRate.toFixed(1)}%`
+                        : "—"}
+                    </div>
                   </div>
                 </div>
-
-                <div className="bg-black/20 border border-gray-800 rounded p-3">
-                  <div className="text-[11px] text-gray-500 mb-1">
-                    Total Winnings
-                  </div>
-                  <div className="font-mono font-semibold text-emerald-300">
-                    ${formatUSD(totalWinnings)}
-                  </div>
-                </div>
-
-                <div className="bg-black/20 border border-gray-800 rounded p-3">
-                  <div className="text-[11px] text-gray-500 mb-1">
-                    Total Staked
-                  </div>
-                  <div className="font-mono font-semibold text-gray-300">
-                    ${formatUSD(totalStaked)}
-                  </div>
-                </div>
-
-                <div className="bg-black/20 border border-gray-800 rounded p-3">
-                  <div className="text-[11px] text-gray-500 mb-1">Wins</div>
-                  <div className="font-mono font-semibold">{wins}</div>
-                </div>
-
-                <div className="bg-black/20 border border-gray-800 rounded p-3">
-                  <div className="text-[11px] text-gray-500 mb-1">Win Rate</div>
-                  <div className="font-mono font-semibold">
-                    {completedBets ? `${winRate.toFixed(1)}%` : "—"}
-                  </div>
-                </div>
-              </div>
+              </GlassCard>
             </div>
           </aside>
         </div>
 
+        {/* Bets / History Table */}
         <div className="mt-8">
-          <section className="bg-gray-900/30 border border-gray-800/50 rounded-xl p-4">
-            <h3 className="text-sm font-semibold text-gray-200 mb-3">Bets</h3>
-            <BetsTable activeBets={activeBets} betHistory={betHistory} />
-          </section>
+          <GlassCard className="p-5">
+            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-3 flex items-center gap-2">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+              Bets
+            </h3>
+            <BetsTable
+              activeBets={activeBets}
+              betHistory={betHistory}
+            />
+          </GlassCard>
         </div>
       </div>
 
+      {/* Toast / ephemeral notifications */}
       {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 border border-gray-700 rounded px-4 py-2 text-sm shadow-lg">
-          {toast.message ??
-            (toast.type === "win"
-              ? `Won $${formatUSD(toast.amount ?? 0)}`
-              : toast.type === "lose"
-              ? `Lost $${formatUSD(toast.amount ?? 0)}`
-              : "")}
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[100]">
+          <div className="rounded-full bg-black/70 backdrop-blur-xl px-4 py-2 text-[13px] font-medium text-white ring-1 ring-white/20 shadow-[0_40px_120px_rgba(251,191,36,0.4)]">
+            {toast.message ??
+              (toast.type === "win"
+                ? `Won $${formatUSD(
+                    toast.amount ?? 0
+                  )}`
+                : toast.type === "lose"
+                ? `Lost $${formatUSD(
+                    toast.amount ?? 0
+                  )}`
+                : "")}
+          </div>
         </div>
       )}
     </div>
