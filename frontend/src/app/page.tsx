@@ -627,7 +627,7 @@ export default function PredictionMarketUI() {
           const list =
             (response as BalanceUpdateResponse).params
               ?.balanceUpdates ?? [];
-          setLedgerBalances((prev) => {
+          setLedgerBalances((prev: any) => {
             const base = { ...(prev ?? {}) };
             for (const b of list) base[b.asset] = b.amount;
             return base;
