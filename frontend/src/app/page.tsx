@@ -404,13 +404,13 @@ export default function PredictionMarketUI() {
       updated[roundIndex] = { ...round, buckets };
       return updated;
     });
-    webSocketService.send("bet/place", {
-      roundId: r.id,
-      bucketId,
-      amount: amt,
-      market: markets[selectedMarket].name,
-      address: account ?? null,
-    });
+    // webSocketService.send("bet/place", {
+    //   roundId: r.id,
+    //   bucketId,
+    //   amount: amt,
+    //   market: markets[selectedMarket].name,
+    //   address: account ?? null,
+    // });
     setToast({ type: "info", message: "Bet placed (demo mode)" });
   };
 
