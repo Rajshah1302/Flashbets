@@ -412,7 +412,7 @@ export default function PredictionMarketUI() {
     //   market: markets[selectedMarket].name,
     //   address: account ?? null,
     // });
-    setToast({ type: "info", message: "Bet placed (demo mode)" });
+    setToast({ type: "info", message: "Bet placed" });
   };
 
   const pendingStakeTotal = useMemo(
