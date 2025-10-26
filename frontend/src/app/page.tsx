@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import React, {
@@ -676,19 +677,19 @@ export default function PredictionMarketUI() {
 
   // subscribe to market feed
   useEffect(() => {
-    if (wsStatus !== "Connected") return;
-    webSocketService.send("market/subscribe", {
-      priceId: selectedPriceId,
-      market: markets[selectedMarket].name,
-    });
+    // if (wsStatus !== "Connected") return;
+    // webSocketService.send("market/subscribe", {
+    //   priceId: selectedPriceId,
+    //   market: markets[selectedMarket].name,
+    // });
   }, [wsStatus, selectedPriceId, selectedMarket]);
 
   // notify server wallet connected
   useEffect(() => {
-    if (account && wsStatus === "Connected")
-      webSocketService.send("wallet/connected", {
-        address: account,
-      });
+    // if (account && wsStatus === "Connected")
+    //   webSocketService.send("wallet/connected", {
+    //     address: account,
+    //   });
   }, [account, wsStatus]);
 
   // reset auth UI when disconnected wallet
