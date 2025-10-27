@@ -5,6 +5,15 @@
 </p>
 
 <p align="center">
+  <a href="whitepaper.pdf" target="_blank">
+    <img
+      src="https://img.shields.io/badge/FlashBets-Technical_Whitepaper-black?style=for-the-badge&logo=readthedocs&logoColor=white"
+      alt="FlashBets Technical Whitepaper"
+    />
+  </a>
+</p>
+
+<p align="center">
   <a href="https://www.youtube.com/watch?v=5V4hTXVp0pE" target="_blank">
     <img src="https://img.youtube.com/vi/5V4hTXVp0pE/0.jpg" alt="FlashBets Demo Video" width="560" />
   </a>
@@ -721,4 +730,3 @@ The codebase is deliberately structured so that:
 * wallet/session plumbing can be swapped (wagmi),
 * and the liquidity / settlement layer (YellowSDKWagmiService) can graduate from “simulated” to “production-grade” without rewriting the UI.
 
-This README should give new contributors and auditors enough context to navigate the repo, run it locally, understand the trust boundaries, and start improving specific layers without guessing.
