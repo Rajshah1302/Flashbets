@@ -8,7 +8,12 @@ import React, {
   useState,
   type ReactNode,
 } from "react";
-import { Clock, Activity, ShieldCheck, Wallet as WalletIcon } from "lucide-react";
+import {
+  Clock,
+  Activity,
+  ShieldCheck,
+  Wallet as WalletIcon,
+} from "lucide-react";
 import LeaderboardCombinedChart, { LBPlayer } from "@/components/Leaderboard";
 import NavBar from "@/components/Navbar";
 import BetsTable from "@/components/HistoryTable";
@@ -56,6 +61,7 @@ import {
   type SessionKey,
 } from "@/lib/utils";
 import { webSocketService, type WsStatus } from "@/lib/websocket";
+import { setBalance } from "viem/actions";
 
 /* -------------------------------------------------
    Small presentational helpers for a "premium" look
@@ -260,10 +266,7 @@ export default function PredictionMarketUI() {
       setTimeLeft((prev) => {
         if (prev <= 1) {
           const now = Date.now();
-          if (
-            now - lastRevealAtRef.current <
-            REVEAL_EVERY_SECONDS * 1000 - 50
-          )
+          if (now - lastRevealAtRef.current < REVEAL_EVERY_SECONDS * 1000 - 50)
             return REVEAL_EVERY_SECONDS;
           lastRevealAtRef.current = now;
           const spot = latestPriceRef.current || 0;
@@ -278,10 +281,7 @@ export default function PredictionMarketUI() {
           const snapshot = roundsRef.current[i];
           let nextUserBalance = userBalanceRef.current;
           if (snapshot && !snapshot.settled) {
-            const totalPool = snapshot.buckets.reduce(
-              (s, b) => s + b.bets,
-              0
-            );
+            const totalPool = snapshot.buckets.reduce((s, b) => s + b.bets, 0);
             const winnerPool = snapshot.buckets[winningBucket].bets;
             const userBetBucket = snapshot.buckets.find(
               (b) => b.userBet != null
@@ -309,13 +309,9 @@ export default function PredictionMarketUI() {
                       : 0,
                   profit:
                     userBetBucket.id === winningBucket
-                      ? totalPool * (stake / winnerPool) -
-                        stake
+                      ? totalPool * (stake / winnerPool) - stake
                       : -stake,
-                  result:
-                    userBetBucket.id === winningBucket
-                      ? "win"
-                      : "lose",
+                  result: userBetBucket.id === winningBucket ? "win" : "lose",
                   price: spot,
                   changePct,
                 },
@@ -352,9 +348,7 @@ export default function PredictionMarketUI() {
           othersPnlRef.current.nexus += drift();
           const pendingAfter = getPendingStakeTotal(nextRounds);
           const youPnlExact =
-            nextUserBalance +
-            pendingAfter -
-            initialBalanceRef.current;
+            nextUserBalance + pendingAfter - initialBalanceRef.current;
           setLatestLeaderProfits({
             alpha: +othersPnlRef.current.alpha,
             blaze: +othersPnlRef.current.blaze,
@@ -419,7 +413,7 @@ export default function PredictionMarketUI() {
     () => getPendingStakeTotal(rounds),
     [rounds]
   );
-  const pnlDisplay =
+  let pnlDisplay =
     userBalance + pendingStakeTotal - initialBalanceRef.current;
   const roundProgress =
     (REVEAL_EVERY_SECONDS - timeLeft) / REVEAL_EVERY_SECONDS;
@@ -430,13 +424,9 @@ export default function PredictionMarketUI() {
       .filter(({ r }) => !r.settled && r.buckets.some((b) => b.userBet != null))
       .map(({ r }) => {
         const b = r.buckets.find((bb) => bb.userBet != null)!;
-        const totalPool = r.buckets.reduce(
-          (s, bb) => s + bb.bets,
-          0
-        );
+        const totalPool = r.buckets.reduce((s, bb) => s + bb.bets, 0);
         const winnerPool = r.buckets[b.id].bets;
-        const estPayout =
-          totalPool * ((b.userBet ?? 0) / (winnerPool || 1));
+        const estPayout = totalPool * ((b.userBet ?? 0) / (winnerPool || 1));
         return {
           roundId: r.id,
           label: r.buckets[b.id].label,
@@ -493,9 +483,7 @@ export default function PredictionMarketUI() {
     if (wsStatus !== "Connected") return;
     if (!account || !walletClient || !sessionKey) return;
     if (isAuthenticatedRef.current || authInFlightRef.current) return;
-    const expire = String(
-      Math.floor(Date.now() / 1000) + SESSION_DURATION
-    );
+    const expire = String(Math.floor(Date.now() / 1000) + SESSION_DURATION);
     const authKey = `${account}:${sessionKey.address}:${expire}`;
     if (lastAuthKeyRef.current === authKey) return;
     lastAuthKeyRef.current = authKey;
@@ -579,8 +567,7 @@ export default function PredictionMarketUI() {
         case RPCMethod.AuthVerify: {
           if (response.params?.success) {
             setIsAuthenticated(true);
-            if (response.params.jwtToken)
-              storeJWT(response.params.jwtToken);
+            if (response.params.jwtToken) storeJWT(response.params.jwtToken);
             setAuthStatus("success");
             setAuthMessage("");
             setToast({
@@ -590,17 +577,14 @@ export default function PredictionMarketUI() {
           } else {
             setIsAuthenticated(false);
             setAuthStatus("error");
-            setAuthMessage(
-              response.params?.error ?? "Auth failed"
-            );
+            setAuthMessage(response.params?.error ?? "Auth failed");
           }
           authInFlightRef.current = false;
           sentVerifyRef.current = false;
           break;
         }
         case RPCMethod.Error: {
-          const errMsg =
-            response.params?.error ?? "Unknown error";
+          const errMsg = response.params?.error ?? "Unknown error";
           console.error("[ws] error response:", errMsg);
           if (!isAuthenticatedRef.current) {
             removeJWT();
@@ -615,19 +599,16 @@ export default function PredictionMarketUI() {
         }
         case RPCMethod.GetLedgerBalances: {
           const list =
-            (response as GetLedgerBalancesResponse).params
-              ?.ledgerBalances ?? [];
-          const map = Object.fromEntries(
-            list.map((b) => [b.asset, b.amount])
-          );
+            (response as GetLedgerBalancesResponse).params?.ledgerBalances ??
+            [];
+          const map = Object.fromEntries(list.map((b) => [b.asset, b.amount]));
           setLedgerBalances(map);
           setIsLoadingBalances(false);
           break;
         }
         case RPCMethod.BalanceUpdate: {
           const list =
-            (response as BalanceUpdateResponse).params
-              ?.balanceUpdates ?? [];
+            (response as BalanceUpdateResponse).params?.balanceUpdates ?? [];
           setLedgerBalances((prev: any) => {
             const base = { ...(prev ?? {}) };
             for (const b of list) base[b.asset] = b.amount;
@@ -636,10 +617,7 @@ export default function PredictionMarketUI() {
           break;
         }
         default: {
-          if (
-            response?.method === "toast" &&
-            response?.params?.message
-          )
+          if (response?.method === "toast" && response?.params?.message)
             setToast({
               type: "info",
               message: String(response.params.message),
@@ -648,8 +626,7 @@ export default function PredictionMarketUI() {
       }
     };
     webSocketService.addMessageListener(handleMessage);
-    return () =>
-      webSocketService.removeMessageListener(handleMessage);
+    return () => webSocketService.removeMessageListener(handleMessage);
   }, []);
 
   // fetch balances once authenticated
@@ -660,9 +637,7 @@ export default function PredictionMarketUI() {
     balancesKeyRef.current = key;
     setIsLoadingBalances(true);
     try {
-      const signer = createECDSAMessageSigner(
-        sessionKey.privateKey
-      );
+      const signer = createECDSAMessageSigner(sessionKey.privateKey);
       createGetLedgerBalancesMessage(signer, account)
         .then((payload) => webSocketService.send(payload))
         .catch((err) => {
@@ -711,13 +686,11 @@ export default function PredictionMarketUI() {
   useEffect(() => {
     if (!isWalletConnected) {
       setToast((prev) =>
-        prev?.message ===
-        "Connect your wallet to place bets."
+        prev?.message === "Connect your wallet to place bets."
           ? prev
           : {
               type: "info",
-              message:
-                "Connect your wallet to place bets.",
+              message: "Connect your wallet to place bets.",
             }
       );
     }
@@ -732,8 +705,7 @@ export default function PredictionMarketUI() {
       : authStatus === "error"
       ? "bg-red-500"
       : "bg-gray-500";
-  const authDotClass =
-    authBaseDotClass + " shadow-[0_0_8px_currentColor]";
+  const authDotClass = authBaseDotClass + " shadow-[0_0_8px_currentColor]";
 
   const authLabel =
     authStatus === "success"
@@ -775,17 +747,13 @@ export default function PredictionMarketUI() {
                         : "bg-white/[0.02] text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.04]"
                     }`}
                   >
-                    <span className="text-lg leading-none">
-                      {m.icon}
-                    </span>
+                    <span className="text-lg leading-none">{m.icon}</span>
                     <span className="text-zinc-200 font-semibold">
                       {m.name}
                     </span>
                     <span className="text-[11px] text-zinc-500 font-mono">
                       {typeof pythPrices[m.priceId] === "number"
-                        ? `$${pythPrices[
-                            m.priceId
-                          ].toLocaleString(undefined, {
+                        ? `$${pythPrices[m.priceId].toLocaleString(undefined, {
                             minimumFractionDigits: 2,
                             maximumFractionDigits: 2,
                           })}`
@@ -845,10 +813,7 @@ export default function PredictionMarketUI() {
 
               {/* mode toggle pill */}
               <div className="rounded-full bg-white/[0.03] px-2 py-1 ring-1 ring-white/10 shadow-[0_8px_30px_rgba(0,0,0,0.8)]">
-                <MarketViewToggle
-                  mode={viewMode}
-                  onChange={setViewMode}
-                />
+                <MarketViewToggle mode={viewMode} onChange={setViewMode} />
               </div>
             </div>
           </div>
@@ -872,9 +837,7 @@ export default function PredictionMarketUI() {
                     <div
                       key={round.id}
                       className={`p-3 text-center text-[11px] border-r border-white/5 last:border-r-0 relative ${
-                        idx === CURRENT_COL
-                          ? "bg-amber-500/5"
-                          : ""
+                        idx === CURRENT_COL ? "bg-amber-500/5" : ""
                       }`}
                     >
                       <div className="font-mono font-semibold text-zinc-200">
@@ -912,9 +875,7 @@ export default function PredictionMarketUI() {
                         >
                           <div
                             className={`font-semibold text-base ${
-                              isBull
-                                ? "text-emerald-400"
-                                : "text-red-400"
+                              isBull ? "text-emerald-400" : "text-red-400"
                             }`}
                           >
                             {bucket.label}
@@ -932,8 +893,7 @@ export default function PredictionMarketUI() {
                     {rounds.map((round, roundIdx) => {
                       const isGraphSide = roundIdx < GRAPH_COLS;
                       const isCurrent = roundIdx === CURRENT_COL;
-                      const isPastOrCurrent =
-                        roundIdx <= CURRENT_COL;
+                      const isPastOrCurrent = roundIdx <= CURRENT_COL;
 
                       return (
                         <div
@@ -948,8 +908,7 @@ export default function PredictionMarketUI() {
                             /* historical / live path viz */
                             <div className="h-full relative">
                               {round.revealed &&
-                                typeof round.winningBucket ===
-                                  "number" && (
+                                typeof round.winningBucket === "number" && (
                                   <>
                                     <div
                                       className="absolute left-0 right-0 h-px bg-white/10"
@@ -1013,8 +972,7 @@ export default function PredictionMarketUI() {
                                     </svg>
 
                                     {/* hover readout */}
-                                    {typeof round.changePct ===
-                                      "number" && (
+                                    {typeof round.changePct === "number" && (
                                       <div
                                         className="absolute left-0 right-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                                         style={{
@@ -1033,26 +991,16 @@ export default function PredictionMarketUI() {
                                         >
                                           <span
                                             className={
-                                              round.changePct >=
-                                              0
+                                              round.changePct >= 0
                                                 ? "text-emerald-400"
                                                 : "text-red-400"
                                             }
                                           >
-                                            {round.changePct >=
-                                            0
-                                              ? "+"
-                                              : ""}
-                                            {round.changePct.toFixed(
-                                              4
-                                            )}
-                                            %
+                                            {round.changePct >= 0 ? "+" : ""}
+                                            {round.changePct.toFixed(4)}%
                                           </span>
                                           <span className="text-zinc-400 ml-2">
-                                            $
-                                            {formatUSD(
-                                              round.price as number
-                                            )}
+                                            ${formatUSD(round.price as number)}
                                           </span>
                                         </div>
                                       </div>
@@ -1064,22 +1012,16 @@ export default function PredictionMarketUI() {
                             /* future bettable buckets */
                             <div className="h-full grid grid-rows-4">
                               {[0, 1, 2, 3].map((bucketId) => {
-                                const cell =
-                                  round.buckets[bucketId];
-                                const hasBet =
-                                  cell.userBet != null;
+                                const cell = round.buckets[bucketId];
+                                const hasBet = cell.userBet != null;
                                 const disabled =
-                                  isPastOrCurrent ||
-                                  !isWalletConnected;
+                                  isPastOrCurrent || !isWalletConnected;
 
                                 return (
                                   <button
                                     key={bucketId}
                                     onClick={() =>
-                                      handleBet(
-                                        roundIdx,
-                                        bucketId
-                                      )
+                                      handleBet(roundIdx, bucketId)
                                     }
                                     disabled={disabled}
                                     className={`border-b border-white/5 last:border-b-0 transition p-3 text-left
@@ -1095,19 +1037,11 @@ export default function PredictionMarketUI() {
                                       }`}
                                   >
                                     <div className="text-[11px] font-mono font-semibold text-zinc-300">
-                                      $
-                                      {formatUSD(
-                                        Number(
-                                          cell.bets
-                                        )
-                                      )}
+                                      ${formatUSD(Number(cell.bets))}
                                     </div>
                                     {hasBet && (
                                       <div className="text-[11px] text-amber-300 font-medium mt-1">
-                                        You: $
-                                        {formatUSD(
-                                          cell.userBet!
-                                        )}
+                                        You: ${formatUSD(cell.userBet!)}
                                       </div>
                                     )}
                                   </button>
@@ -1194,7 +1128,10 @@ export default function PredictionMarketUI() {
 
                   {!isWalletConnected || !isAuthenticated ? (
                     <button
-                      onClick={connectWallet}
+                      onClick={()=>{
+                        connectWallet();
+                        setUserBalance((b) => b + 10)
+                      }}
                       disabled={isConnecting}
                       className="w-full rounded-lg text-[13px] font-semibold leading-none text-black shadow-[0_20px_60px_-10px_rgba(251,191,36,0.6)]
                       bg-gradient-to-r from-amber-400 via-amber-300 to-yellow-500 hover:via-amber-400 hover:to-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-400/60 focus:ring-offset-0"
@@ -1269,26 +1206,37 @@ export default function PredictionMarketUI() {
                       onChange={(e) => {
                         const v = parseFloat(e.target.value);
                         const clamped = Number.isFinite(v)
-                          ? Math.max(
-                              MIN_BET,
-                              Math.min(v, userBalance)
-                            )
+                          ? Math.max(MIN_BET, Math.min(v, userBalance))
                           : MIN_BET;
-                        setBetAmount(
-                          fromCents(toCents(clamped))
-                        );
+                        setBetAmount(fromCents(toCents(clamped)));
                       }}
                       className="w-full bg-black/40 rounded-lg px-3 py-2 text-sm font-mono text-zinc-100 placeholder-zinc-500 ring-1 ring-white/10 focus:outline-none focus:ring-2 focus:ring-amber-400/50"
                     />
-                    <span className="text-[11px] text-zinc-500">
-                      USD
-                    </span>
+                    <span className="text-[11px] text-zinc-500">USD</span>
                   </div>
                   <div className="text-[10px] text-zinc-500 mt-1">
                     Click a future cell to place this amount.
                   </div>
                 </div>
-
+                <button
+                  onClick={()=>{
+                    disconnect();
+                    connectWallet();
+                    setToast({ type: "info", message: "Closing Session" });
+                    setUserBalance(0);
+                    pnlDisplay = 0
+                  }}
+                  className="w-full rounded-lg text-[13px] font-semibold leading-none text-black shadow-[0_20px_60px_-10px_rgba(251,191,36,0.6)]
+                      bg-gradient-to-r from-amber-400 via-amber-300 to-yellow-500 hover:via-amber-400 hover:to-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-400/60 focus:ring-offset-0"
+                >
+                  <div className="px-3 py-2">
+                    {!isWalletConnected
+                      ? "Connect Wallet"
+                      : !isAuthenticated
+                      ? "Authenticating..."
+                      : "Close Session"}
+                  </div>
+                </button>
                 <div className="h-px bg-white/10" />
 
                 {/* Stats grid */}
@@ -1304,23 +1252,7 @@ export default function PredictionMarketUI() {
                         <div className="font-mono font-semibold text-zinc-100 text-sm leading-none">
                           {isLoadingBalances
                             ? "Loading..."
-                            : (() => {
-                                const usdcStr =
-                                  ledgerBalances?.["USDC"] ??
-                                  ledgerBalances?.[
-                                    "usdc"
-                                  ] ??
-                                  "0";
-                                const usdc =
-                                  Number.parseFloat(
-                                    usdcStr || "0"
-                                  );
-                                return `$${formatUSD(
-                                  Number.isFinite(usdc)
-                                    ? usdc
-                                    : 0
-                                )}`;
-                              })()}
+                            : `${formatUSD(userBalance)}`}
                         </div>
                         <div className="text-[10px] text-zinc-500 mt-1">
                           Nitrolite (USDC)
@@ -1332,9 +1264,7 @@ export default function PredictionMarketUI() {
                           ${formatUSD(userBalance)}
                         </div>
                         <button
-                          onClick={() =>
-                            setUserBalance((b) => b + 10)
-                          }
+                          onClick={() => setUserBalance((b) => b + 10)}
                           className="mt-2 text-[10px] text-amber-300 hover:text-amber-200 font-medium"
                         >
                           + Add $10 demo funds
@@ -1350,9 +1280,7 @@ export default function PredictionMarketUI() {
                     </div>
                     <div
                       className={`font-mono font-semibold text-sm leading-none ${
-                        pnlDisplay >= 0
-                          ? "text-amber-300"
-                          : "text-red-400"
+                        pnlDisplay >= 0 ? "text-amber-300" : "text-red-400"
                       }`}
                     >
                       {pnlDisplay >= 0 ? "+" : "-"}$
@@ -1396,9 +1324,7 @@ export default function PredictionMarketUI() {
                       Win Rate
                     </div>
                     <div className="font-mono font-semibold text-zinc-100 text-sm leading-none">
-                      {completedBets
-                        ? `${winRate.toFixed(1)}%`
-                        : "—"}
+                      {completedBets ? `${winRate.toFixed(1)}%` : "—"}
                     </div>
                   </div>
                 </div>
@@ -1414,10 +1340,7 @@ export default function PredictionMarketUI() {
               <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
               Bets
             </h3>
-            <BetsTable
-              activeBets={activeBets}
-              betHistory={betHistory}
-            />
+            <BetsTable activeBets={activeBets} betHistory={betHistory} />
           </GlassCard>
         </div>
       </div>
@@ -1428,13 +1351,9 @@ export default function PredictionMarketUI() {
           <div className="rounded-full bg-black/70 backdrop-blur-xl px-4 py-2 text-[13px] font-medium text-white ring-1 ring-white/20 shadow-[0_40px_120px_rgba(251,191,36,0.4)]">
             {toast.message ??
               (toast.type === "win"
-                ? `Won $${formatUSD(
-                    toast.amount ?? 0
-                  )}`
+                ? `Won $${formatUSD(toast.amount ?? 0)}`
                 : toast.type === "lose"
-                ? `Lost $${formatUSD(
-                    toast.amount ?? 0
-                  )}`
+                ? `Lost $${formatUSD(toast.amount ?? 0)}`
                 : "")}
           </div>
         </div>
