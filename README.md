@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/user-attachments/files/23188392/FlashBets_Whitepaper.1.pdf" target="_blank">
+  <a href="https://drive.google.com/file/d/1neRsoBcB0M4ycVp2mboEcPpTXbovOiBm/view?usp=sharing" target="_blank">
     <img
       src="https://img.shields.io/badge/FlashBets-Technical_Whitepaper-black?style=for-the-badge&logo=readthedocs&logoColor=white"
       alt="FlashBets Technical Whitepaper"
