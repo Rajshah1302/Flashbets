@@ -128,21 +128,7 @@ FlashBets is intentionally split into three main layers:
 
 High-level data flow:
 
-```txt
-User clicks "Bet ↑ 10"
-  ↓
-PredictionMarketUI (page.tsx) calls executeFlashTrade(...)
-  ↓
-useYellowSDKWagmi hook
-  ↓
-YellowSDKWagmiService
-  ↓
-(Prototype) Simulated trade execution, balance debit, tx hash
-  ↓
-Hook updates React state + QueryClient
-  ↓
-UI refreshes P/L, balance, history, leaderboard
-```
+![User_Flow](https://github.com/user-attachments/assets/aab27cc2-5c8e-4130-acad-dbee4185c66a)
 
 ---
 
