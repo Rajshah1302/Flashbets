@@ -61,6 +61,8 @@ Instead of pushing every interaction fully on-chain (and forcing users to pay ga
 
 Under the hood, the app is a modern Next.js 15 / React 19, fully client-driven trading UI with live round timers, payout math, P/L tracking, leaderboards, and payout & risk breakdown cards.
 
+![Meme](https://github.com/user-attachments/assets/e40d11c7-d15d-41c3-9964-fd25714bb1bf)
+
 ---
 
 ## 2. Key Features
